@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AR Crown – TensorFlow + Three.js</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #fff;
+      height: 100%;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* selfie mirror */
+      filter: brightness(0.95) contrast(1.05);
+      z-index: 1;
+    }
+
+    #ar-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    #status {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 4px 8px;
+      font-size: 11px;
+      background: rgba(0,0,0,0.65);
+      border-radius: 6px;
+      z-index: 3;
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="ar-canvas"></canvas>
+  <div id="status">Status: initializing…</div>
+</div>
+
+<!-- TensorFlow.js core -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+<!-- Face landmarks detection model (new detector API) -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@1.0.3/dist/face-landmarks-detection.min.js"></script>
+
+<!-- Three.js -->
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+<script>
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('ar-canvas');
+  const statusEl = document.getElementById('status');
+
+  // Three.js stuff
+  let renderer, scene, camera;
+  let headAnchor, crown;
+
+  // TensorFlow detector
+  let detector = null;
+  let isModelReady = false;
+  let isVideoReady = false;
+
+  // video dimensions
+  let videoWidth = 640;
+  let videoHeight = 480;
+
+  window.addEventListener('load', () => {
+    initThree();
+    initCamera().then(() => {
+      isVideoReady = true;
+      videoWidth = video.videoWidth || videoWidth;
+      videoHeight = video.videoHeight || videoHeight;
+      statusEl.textContent = 'Status: camera ready, loading model…';
+      initTFModel();
+    });
+  });
+
+  // -----------------------------
+  // THREE.JS
+  // -----------------------------
+  function initThree() {
+    renderer = new THREE.WebGLRenderer({
+      canvas: canvas,
+      alpha: true,
+      antialias: true
+    });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    scene = new THREE.Scene();
+
+    camera = new THREE.PerspectiveCamera(
+      45,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      100
+    );
+    camera.position.set(0, 0, 3);
+    scene.add(camera);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x111122, 1.0);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(3, 6, 5);
+    scene.add(dir);
+
+    headAnchor = new THREE.Object3D();
+    scene.add(headAnchor);
+
+    // Simple torus crown – we can replace with GLB later
+    const crownGeo = new THREE.TorusGeometry(0.4, 0.08, 16, 64);
+    const crownMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700,
+      metalness: 1.0,
+      roughness: 0.15,
+      emissive: 0xffe066,
+      emissiveIntensity: 0.7
+    });
+    crown = new THREE.Mesh(crownGeo, crownMat);
+    crown.rotation.x = Math.PI / 2;
+    crown.position.y = 0.15;
+    headAnchor.add(crown);
+
+    window.addEventListener('resize', onWindowResize);
+    animate();
+  }
+
+  function onWindowResize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  }
+
+  // -----------------------------
+  // CAMERA
+  // -----------------------------
+  async function initCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' },
+        audio: false
+      });
+      video.srcObject = stream;
+
+      return new Promise((resolve) => {
+        video.onloadeddata = () => {
+          resolve();
+        };
+      });
+    } catch (err) {
+      console.error('Camera error:', err);
+      statusEl.textContent = 'Camera error: ' + err.message;
+    }
+  }
+
+  // -----------------------------
+  // TENSORFLOW MODEL
+  // -----------------------------
+  async function initTFModel() {
+    try {
+      const modelType = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
+      const detectorConfig = {
+        runtime: 'tfjs',
+        refineLandmarks: true,
+        maxFaces: 1
+      };
+
+      detector = await faceLandmarksDetection.createDetector(modelType, detectorConfig);
+      isModelReady = true;
+      statusEl.textContent = 'Status: model loaded. Tracking…';
+      startTrackingLoop();
+    } catch (err) {
+      console.error('Model load error:', err);
+      statusEl.textContent = 'Model load error: ' + err.message;
+    }
+  }
+
+  // -----------------------------
+  // TRACKING LOOP
+  // -----------------------------
+  function startTrackingLoop() {
+    async function track() {
+      if (!isModelReady || !isVideoReady) {
+        requestAnimationFrame(track);
+        return;
+      }
+
+      // extra guard: make sure video really has data
+      if (video.readyState < 2) { // HAVE_CURRENT_DATA
+        requestAnimationFrame(track);
+        return;
+      }
+
+      try {
+        const faces = await detector.estimateFaces(video, {
+          flipHorizontal: true
+        });
+
+        if (faces && faces.length > 0) {
+          const face = faces[0];
+          const keypoints = face.keypoints || face.scaledMesh;
+
+          if (keypoints && keypoints.length > 0) {
+            const nose =
+              keypoints.find(k => k.name === 'noseTip') ||
+              keypoints[1] || keypoints[0];
+
+            const headX = nose.x ?? nose[0];
+            const headY = nose.y ?? nose[1];
+
+            // raise crown above nose
+            const crownY = headY - (videoHeight * 0.22);
+
+            const nx = (headX / videoWidth) * 2 - 1;
+            const ny = -((crownY / videoHeight) * 2 - 1);
+
+            const ndc = new THREE.Vector3(nx, ny, 0.5);
+            ndc.unproject(camera);
+
+            const dir = ndc.sub(camera.position).normalize();
+            const distanceFromCamera = 2.0;
+            const crownPos = camera.position.clone().add(dir.multiplyScalar(distanceFromCamera));
+
+            headAnchor.position.copy(crownPos);
+            headAnchor.lookAt(camera.position);
+          }
+        }
+      } catch (err) {
+        console.error('Tracking error:', err);
+        statusEl.textContent = 'Tracking error: ' + err.message;
+      }
+
+      requestAnimationFrame(track);
+    }
+
+    track();
+  }
+</script>
+</body>
+</html>
