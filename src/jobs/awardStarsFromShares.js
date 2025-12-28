@@ -1,50 +1,55 @@
-import { pool } from "../db.js";
+import { query } from "../db.js";
 
 export async function awardStarsFromShares() {
-  // We store progress in metadata to avoid double-awarding.
-  // Simple approach: count all shares and compare to how many SHARE awards exist.
+  // For each member, count how many shares since last award window
+  // MVP approach:
+  // - shares_awarded_count on members table
+  // - total shares - awarded shares = new shares
+  // - every 3 new shares => +1 star
 
-  const members = await pool.query("select member_id from members");
+  const members = await query(`SELECT member_id, shares_awarded_count FROM members`);
 
-  for (const row of members.rows) {
-    const member_id = row.member_id;
-
-    const shareCountRes = await pool.query(
-      "select count(*)::int as c from share_logs where member_id=$1",
-      [member_id]
+  for (const m of members.rows) {
+    const totalSharesRes = await query(
+      `SELECT COUNT(*)::int AS c FROM share_events WHERE member_id=$1`,
+      [m.member_id]
     );
-    const shares = shareCountRes.rows[0].c;
+    const totalShares = totalSharesRes.rows[0].c;
+    const alreadyCounted = m.shares_awarded_count || 0;
 
-    const awardedRes = await pool.query(
-      `select coalesce(sum(stars_delta),0)::int as awarded
-       from star_transactions
-       where member_id=$1 and category_code='SHARE_3_TO_1_STAR' and type='EARN' and status='APPROVED'`,
-      [member_id]
-    );
+    const newShares = Math.max(0, totalShares - alreadyCounted);
+    const starsToAward = Math.floor(newShares / 3);
 
-    const starsFromShares = Math.floor(shares / 3);
-    const alreadyAwarded = awardedRes.rows[0].awarded;
+    if (starsToAward > 0) {
+      const sharesConsumed = starsToAward * 3;
 
-    const toAward = starsFromShares - alreadyAwarded;
-    if (toAward <= 0) continue;
-
-    await pool.query("begin");
-    try {
-      await pool.query(
-        "update members set star_balance = star_balance + $1 where member_id=$2",
-        [toAward, member_id]
+      await query(
+        `INSERT INTO star_transactions (member_id, delta, reason)
+         VALUES ($1,$2,$3)`,
+        [m.member_id, starsToAward, `Auto-award from shares: ${sharesConsumed} shares => ${starsToAward} STAR`]
       );
 
-      await pool.query(
-        `insert into star_transactions(member_id, type, category_code, stars_delta, status, metadata)
-         values($1,'EARN','SHARE_3_TO_1_STAR',$2,'APPROVED',$3)`,
-        [member_id, toAward, JSON.stringify({ shares, rule: "3_shares=1_star" })]
+      await query(
+        `UPDATE members
+         SET shares_awarded_count = shares_awarded_count + $1
+         WHERE member_id=$2`,
+        [sharesConsumed, m.member_id]
       );
-
-      await pool.query("commit");
-    } catch (e) {
-      await pool.query("rollback");
-      console.error("awardStarsFromShares failed:", e);
     }
   }
+
+  return { ok: true };
+}
+
+// allow running directly: node src/jobs/awardStarsFromShares.js
+if (import.meta.url === `file://${process.argv[1]}`) {
+  awardStarsFromShares()
+    .then(() => {
+      console.log("✅ awardStarsFromShares complete");
+      process.exit(0);
+    })
+    .catch((e) => {
+      console.error("❌ awardStarsFromShares failed", e);
+      process.exit(1);
+    });
 }
