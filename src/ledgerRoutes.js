@@ -1,79 +1,93 @@
-import express from "express";
-import { pool } from "./db.js";
+import { Router } from "express";
+import { query } from "./db.js";
+import { EarnShareSchema, ReviewVideoSchema } from "./utils/validation.js";
 
-export const ledgerRoutes = express.Router();
+const r = Router();
 
-// helper: safe member lookup (for now by email; later use auth uid)
-async function getOrCreateMember({ email, display_name }) {
-  const existing = await pool.query(
-    "select * from members where email = $1 limit 1",
-    [email]
+// Helper: ensure member exists
+async function ensureMember(member_id) {
+  await query(
+    `INSERT INTO members (member_id) VALUES ($1)
+     ON CONFLICT (member_id) DO NOTHING`,
+    [member_id]
   );
-  if (existing.rows[0]) return existing.rows[0];
-
-  const created = await pool.query(
-    "insert into members(email, display_name) values($1,$2) returning *",
-    [email, display_name || email?.split("@")[0] || "Member"]
-  );
-  return created.rows[0];
 }
 
-// GET balances + rank
-ledgerRoutes.get("/me", async (req, res) => {
-  // TEMP: pass email in header while you build (replace with auth later)
-  const email = req.header("x-member-email");
-  if (!email) return res.status(400).json({ error: "Missing x-member-email" });
+// 1) Track a share click/event (3 shares = 1 STAR)
+r.post("/share", async (req, res) => {
+  const parsed = EarnShareSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const member = await getOrCreateMember({ email });
-  res.json({
-    member_id: member.member_id,
-    email: member.email,
-    display_name: member.display_name,
-    star_balance: member.star_balance,
-    bd_balance: member.bd_balance,
-    rank: member.rank,
-  });
-});
+  const { member_id, share_platform, share_url, proof_url } = parsed.data;
+  await ensureMember(member_id);
 
-// Log a share (counts toward 3=1 STAR)
-ledgerRoutes.post("/share", async (req, res) => {
-  const email = req.header("x-member-email");
-  if (!email) return res.status(400).json({ error: "Missing x-member-email" });
-
-  const { platform, post_type, post_id } = req.body;
-  if (!platform || !post_type || !post_id)
-    return res.status(400).json({ error: "platform, post_type, post_id required" });
-
-  const member = await getOrCreateMember({ email });
-
-  await pool.query(
-    "insert into share_logs(member_id, platform, post_type, post_id) values($1,$2,$3,$4)",
-    [member.member_id, platform, post_type, post_id]
+  await query(
+    `INSERT INTO share_events (member_id, share_platform, share_url, proof_url)
+     VALUES ($1,$2,$3,$4)`,
+    [member_id, share_platform, share_url || null, proof_url || null]
   );
 
-  res.json({ ok: true });
+  res.json({ ok: true, message: "Share logged. Stars are awarded by the shares job (3 shares = 1 STAR)." });
 });
 
-// Submit video review for manual scoring (1-5 stars)
-ledgerRoutes.post("/video-review/submit", async (req, res) => {
-  const email = req.header("x-member-email");
-  if (!email) return res.status(400).json({ error: "Missing x-member-email" });
+// 2) Submit “review video” task (pending admin approval)
+r.post("/review-video", async (req, res) => {
+  const parsed = ReviewVideoSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const member = await getOrCreateMember({ email });
+  const d = parsed.data;
+  await ensureMember(d.member_id);
 
-  const { business_name, address, service_type, video_url, checklist } = req.body;
+  // self-score = number of true items (0–5)
+  const score =
+    Object.values(d.checklist).filter(Boolean).length;
 
-  // store as PENDING; admin will approve and set stars
-  const tx = await pool.query(
-    `insert into star_transactions(member_id, type, category_code, stars_delta, status, proof_url, metadata)
-     values($1,'EARN','VIDEO_REVIEW',0,'PENDING',$2,$3)
-     returning *`,
+  await query(
+    `INSERT INTO video_reviews
+     (member_id, business_name, business_address, service_type, what_makes_special, video_url, self_score, checklist_json, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')`,
     [
-      member.member_id,
-      video_url || null,
-      JSON.stringify({ business_name, address, service_type, checklist }),
+      d.member_id,
+      d.business_name,
+      d.business_address,
+      d.service_type,
+      d.what_makes_special,
+      d.video_url,
+      score,
+      JSON.stringify(d.checklist)
     ]
   );
 
-  res.json({ ok: true, tx: tx.rows[0] });
+  res.json({
+    ok: true,
+    status: "pending",
+    self_score: score,
+    message: "Submitted for approval. If approved, STAR award can match score (1–5) or be adjusted by admin."
+  });
 });
+
+// 3) Balance
+r.get("/balance/:member_id", async (req, res) => {
+  const { member_id } = req.params;
+  await ensureMember(member_id);
+
+  const stars = await query(
+    `SELECT COALESCE(SUM(delta),0) AS stars
+     FROM star_transactions WHERE member_id=$1`,
+    [member_id]
+  );
+
+  const bd = await query(
+    `SELECT COALESCE(SUM(delta),0) AS bd
+     FROM bd_transactions WHERE member_id=$1`,
+    [member_id]
+  );
+
+  res.json({
+    member_id,
+    stars: Number(stars.rows[0].stars),
+    bd: Number(bd.rows[0].bd)
+  });
+});
+
+export default r;
