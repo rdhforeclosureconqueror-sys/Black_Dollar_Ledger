@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
-import { ledgerRoutes } from "./ledgerRoutes.js";
-import { pagtRoutes } from "./pagtRoutes.js";
+import  ledgerRoutes  from "./ledgerRoutes.js";
+import  pagtRoutes  from "./pagtRoutes.js";
 
 const app = express();
 app.use(cors());
