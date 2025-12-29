@@ -9,7 +9,7 @@
     "job:shares": "node src/jobs/awardStarsFromShares.js",
     "job:monthlyVotes": "node src/jobs/monthlyFreeVotes.js",
     "job:ranks": "node src/jobs/rankRecalculation.js"
-  }
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
