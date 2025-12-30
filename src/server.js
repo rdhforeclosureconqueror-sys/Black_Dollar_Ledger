@@ -8,7 +8,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import pg from "pg";
 import connectPgSimple from "connect-pg-simple";
 
-import authRoutes from "./auth/authRoutes.js";
+import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
 
