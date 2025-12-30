@@ -1,4 +1,4 @@
-// src/auth/authRoutes.js
+// src/authRoutes.js
 import { Router } from "express";
 import passport from "passport";
 
