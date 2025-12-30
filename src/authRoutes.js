@@ -1,33 +1,57 @@
+// src/auth/authRoutes.js
 import { Router } from "express";
 import passport from "passport";
 
 const r = Router();
 
-r.get(
-  "/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
-);
+/**
+ * Start Google login
+ * GET /auth/google
+ */
+r.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
 
+/**
+ * Google callback
+ * GET /auth/google/callback
+ */
 r.get(
   "/google/callback",
   passport.authenticate("google", { failureRedirect: "/auth/fail" }),
   (req, res) => {
-    // Successful login → send them somewhere
-    res.redirect("/auth/me");
+    // Send them back to the FRONTEND after login
+    const appBaseUrl = process.env.APP_BASE_URL || "https://simbawaujamaa.com";
+    res.redirect(`${appBaseUrl}/me`);
   }
 );
 
+/**
+ * Who am I?
+ * GET /auth/me
+ */
 r.get("/me", (req, res) => {
-  if (!req.user) return res.status(401).json({ ok: false, error: "NOT_LOGGED_IN" });
-  res.json({ ok: true, user: req.user });
+  if (!req.user) return res.status(401).json({ ok: false, auth: false });
+  res.json({ ok: true, auth: true, user: req.user });
 });
 
-r.get("/logout", (req, res) => {
-  req.logout?.(() => {});
-  res.json({ ok: true });
+/**
+ * Logout
+ * POST /auth/logout
+ */
+r.post("/logout", (req, res, next) => {
+  req.logout((err) => {
+    if (err) return next(err);
+
+    req.session?.destroy(() => {
+      res.clearCookie("bd.sid");
+      res.json({ ok: true });
+    });
+  });
 });
 
-r.get("/fail", (req, res) => {
+/**
+ * Fail
+ */
+r.get("/fail", (_req, res) => {
   res.status(401).send("Google login failed");
 });
 
