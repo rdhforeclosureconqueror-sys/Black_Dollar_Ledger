@@ -8,6 +8,7 @@ import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import pg from "pg";
 import connectPgSimple from "connect-pg-simple";
 
+import authRoutes from "./auth/authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
 
@@ -25,26 +26,22 @@ app.set("trust proxy", 1);
  * Required env vars
  */
 const {
-  NODE_ENV = "development",
+  NODE_ENV = "production",
   PORT,
-  APP_BASE_URL,        // e.g. https://simbawaujamaa.com
+  APP_BASE_URL,         // https://simbawaujamaa.com
   DATABASE_URL,
   SESSION_SECRET,
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
-  GOOGLE_CALLBACK_URL, // e.g. https://api.simbawaujamaa.com/auth/google/callback
+  GOOGLE_CALLBACK_URL,  // https://api.simbawaujamaa.com/auth/google/callback
 } = process.env;
 
-function requireEnv(name, value) {
-  if (!value) throw new Error(`Missing ${name}`);
-}
-
-requireEnv("APP_BASE_URL", APP_BASE_URL);
-requireEnv("DATABASE_URL", DATABASE_URL);
-requireEnv("SESSION_SECRET", SESSION_SECRET);
-requireEnv("GOOGLE_CLIENT_ID", GOOGLE_CLIENT_ID);
-requireEnv("GOOGLE_CLIENT_SECRET", GOOGLE_CLIENT_SECRET);
-requireEnv("GOOGLE_CALLBACK_URL", GOOGLE_CALLBACK_URL);
+if (!APP_BASE_URL) throw new Error("Missing APP_BASE_URL");
+if (!DATABASE_URL) throw new Error("Missing DATABASE_URL");
+if (!SESSION_SECRET) throw new Error("Missing SESSION_SECRET");
+if (!GOOGLE_CLIENT_ID) throw new Error("Missing GOOGLE_CLIENT_ID");
+if (!GOOGLE_CLIENT_SECRET) throw new Error("Missing GOOGLE_CLIENT_SECRET");
+if (!GOOGLE_CALLBACK_URL) throw new Error("Missing GOOGLE_CALLBACK_URL");
 
 /**
  * Body parsing
@@ -53,22 +50,21 @@ app.use(express.json({ limit: "10mb" }));
 
 /**
  * CORS
- * IMPORTANT: credentials:true requires a specific origin (not "*").
- * Allow ONLY your frontend origin(s).
+ * credentials:true requires a specific origin (not "*").
+ * Allow both simba + www if you want.
  */
 const allowedOrigins = new Set([
   APP_BASE_URL,
-  // Optional: if you use www as well, add it:
-  // "https://www.simbawaujamaa.com",
+  APP_BASE_URL.replace("://", "://www."), // if APP_BASE_URL is non-www, allow www too
 ]);
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow non-browser calls (like curl/postman) with no origin
+      // allow server-to-server / curl (no origin)
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked for origin: ${origin}`));
+      return cb(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
   })
@@ -85,13 +81,6 @@ const pool = new Pool({
 
 const PgSession = connectPgSimple(session);
 
-/**
- * Cookie rules:
- * - In production, because frontend and API are on different subdomains,
- *   you MUST use SameSite=None + Secure=true, or sessions won't persist.
- */
-const isProd = NODE_ENV === "production";
-
 app.use(
   session({
     name: "bd.sid",
@@ -103,13 +92,11 @@ app.use(
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    proxy: true, // helps behind proxies
     cookie: {
       httpOnly: true,
-      secure: isProd,                 // MUST be true on https
-      sameSite: isProd ? "none" : "lax",
+      secure: NODE_ENV === "production", // must be true on https
+      sameSite: "lax",
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-      // domain: ".simbawaujamaa.com", // optional; only use if you KNOW you want cookie shared across subdomains
     },
   })
 );
@@ -120,6 +107,9 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
+/**
+ * Minimal session storage
+ */
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
@@ -149,49 +139,12 @@ passport.use(
 /**
  * Health
  */
-app.get("/health", (_req, res) => res.json({ ok: true, env: NODE_ENV }));
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 /**
- * Auth routes
+ * Mount auth routes
  */
-app.get(
-  "/auth/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
-);
-
-app.get(
-  "/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: `${APP_BASE_URL}/login?error=google` }),
-  (_req, res) => {
-    // Send them back to frontend AFTER session cookie is set
-    res.redirect(`${APP_BASE_URL}/me`);
-  }
-);
-
-app.get("/auth/fail", (_req, res) =>
-  res.status(401).send("Google login failed. Try again.")
-);
-
-/**
- * Logout
- */
-app.post("/logout", (req, res, next) => {
-  req.logout((err) => {
-    if (err) return next(err);
-    req.session?.destroy(() => {
-      res.clearCookie("bd.sid");
-      res.json({ ok: true });
-    });
-  });
-});
-
-/**
- * Who am I?
- */
-app.get("/me", (req, res) => {
-  if (!req.user) return res.status(401).json({ ok: false, auth: false });
-  res.json({ ok: true, auth: true, user: req.user });
-});
+app.use("/auth", authRoutes);
 
 /**
  * Gatekeeper middleware
