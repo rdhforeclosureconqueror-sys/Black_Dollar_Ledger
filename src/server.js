@@ -11,29 +11,22 @@ import connectPgSimple from "connect-pg-simple";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
+// import adminRoutes from "./adminRoutes.js"; // ONLY if you actually have this file
 
 dotenv.config();
 
 const app = express();
-
-/**
- * Render sits behind a proxy/load balancer.
- * Required so secure cookies work correctly in production.
- */
 app.set("trust proxy", 1);
 
-/**
- * Required env vars
- */
 const {
   NODE_ENV = "production",
   PORT,
-  APP_BASE_URL,         // https://simbawaujamaa.com
+  APP_BASE_URL,
   DATABASE_URL,
   SESSION_SECRET,
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
-  GOOGLE_CALLBACK_URL,  // https://api.simbawaujamaa.com/auth/google/callback
+  GOOGLE_CALLBACK_URL,
 } = process.env;
 
 if (!APP_BASE_URL) throw new Error("Missing APP_BASE_URL");
@@ -43,25 +36,19 @@ if (!GOOGLE_CLIENT_ID) throw new Error("Missing GOOGLE_CLIENT_ID");
 if (!GOOGLE_CLIENT_SECRET) throw new Error("Missing GOOGLE_CLIENT_SECRET");
 if (!GOOGLE_CALLBACK_URL) throw new Error("Missing GOOGLE_CALLBACK_URL");
 
-/**
- * Body parsing
- */
 app.use(express.json({ limit: "10mb" }));
 
-/**
- * CORS
- * credentials:true requires a specific origin (not "*").
- * Allow both simba + www if you want.
- */
+// CORS: allow simba + www, and allow cookies
 const allowedOrigins = new Set([
   APP_BASE_URL,
-  APP_BASE_URL.replace("://", "://www."), // if APP_BASE_URL is non-www, allow www too
+  APP_BASE_URL.includes("://www.")
+    ? APP_BASE_URL.replace("://www.", "://")
+    : APP_BASE_URL.replace("://", "://www."),
 ]);
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow server-to-server / curl (no origin)
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked origin: ${origin}`));
@@ -70,9 +57,7 @@ app.use(
   })
 );
 
-/**
- * Postgres session store (PRODUCTION SAFE)
- */
+// Postgres pool + session store
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -94,28 +79,21 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: NODE_ENV === "production", // must be true on https
+      secure: NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+      path: "/", // IMPORTANT
     },
   })
 );
 
-/**
- * Passport init (must be AFTER session middleware)
- */
 app.use(passport.initialize());
 app.use(passport.session());
 
-/**
- * Minimal session storage
- */
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-/**
- * Google OAuth Strategy
- */
+// Google OAuth
 passport.use(
   new GoogleStrategy(
     {
@@ -136,32 +114,38 @@ passport.use(
   )
 );
 
-/**
- * Health
- */
+// Health
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/**
- * Mount auth routes
- */
+// Route list helper (so you KNOW what exists)
+app.get("/routes", (_req, res) => {
+  res.json({
+    ok: true,
+    routes: [
+      "GET /health",
+      "GET /routes",
+      "GET /auth/google",
+      "GET /auth/google/callback",
+      "GET /auth/me",
+      "POST /auth/logout",
+      "ledger routes under /ledger/* (auth required)",
+      "pagt routes under /pagt/* (auth required)",
+    ],
+  });
+});
+
+// Mount routers (THIS is the key)
 app.use("/auth", authRoutes);
 
-/**
- * Gatekeeper middleware
- */
 function requireAuth(req, res, next) {
   if (req.user) return next();
   return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
 }
 
-/**
- * Protected APIs
- */
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/pagt", requireAuth, pagtRoutes);
 
-/**
- * Start
- */
+// app.use("/admin", requireAuth, adminRoutes); // only if file exists + you want it
+
 const port = PORT || 3000;
 app.listen(port, () => console.log("API running on", port));
