@@ -7,8 +7,8 @@ const r = Router();
 // Helper: ensure member exists
 async function ensureMember(id) {
   await query(
-    `INSERT INTO members (member_id) VALUES ($1)
-     ON CONFLICT (member_id) DO NOTHING`,
+    `INSERT INTO members (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING`,
     [id]
   );
 }
