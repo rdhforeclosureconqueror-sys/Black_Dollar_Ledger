@@ -11,7 +11,6 @@ import connectPgSimple from "connect-pg-simple";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
-// import adminRoutes from "./adminRoutes.js"; // ONLY if you actually have this file
 
 dotenv.config();
 
@@ -20,7 +19,7 @@ app.set("trust proxy", 1);
 
 const {
   NODE_ENV = "production",
-  PORT,
+  PORT = 3000,
   APP_BASE_URL,
   DATABASE_URL,
   SESSION_SECRET,
@@ -38,7 +37,9 @@ if (!GOOGLE_CALLBACK_URL) throw new Error("Missing GOOGLE_CALLBACK_URL");
 
 app.use(express.json({ limit: "10mb" }));
 
-// CORS: allow simba + www, and allow cookies
+/** -------------------------
+ * CORS (cookies supported)
+ * ------------------------*/
 const allowedOrigins = new Set([
   APP_BASE_URL,
   APP_BASE_URL.includes("://www.")
@@ -49,6 +50,7 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, cb) => {
+      // allow server-to-server / curl / render health checks
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked origin: ${origin}`));
@@ -57,7 +59,9 @@ app.use(
   })
 );
 
-// Postgres pool + session store
+/** -------------------------
+ * Postgres Pool + Sessions
+ * ------------------------*/
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -82,7 +86,7 @@ app.use(
       secure: NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 1000 * 60 * 60 * 24 * 7,
-      path: "/", // IMPORTANT
+      path: "/",
     },
   })
 );
@@ -93,7 +97,9 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-// Google OAuth
+/** -------------------------
+ * Google OAuth
+ * ------------------------*/
 passport.use(
   new GoogleStrategy(
     {
@@ -102,8 +108,10 @@ passport.use(
       callbackURL: GOOGLE_CALLBACK_URL,
     },
     async (_accessToken, _refreshToken, profile, done) => {
+      // ✅ This is your "session user". DB member row creation happens in /ledger routes.
       const user = {
         provider: "google",
+        id: profile.id, // ✅ make id explicit
         googleId: profile.id,
         displayName: profile.displayName,
         email: profile.emails?.[0]?.value ?? null,
@@ -114,27 +122,35 @@ passport.use(
   )
 );
 
-// Health
+/** -------------------------
+ * Health + Route Map
+ * ------------------------*/
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// Route list helper (so you KNOW what exists)
 app.get("/routes", (_req, res) => {
   res.json({
     ok: true,
-    routes: [
+    mounts: {
+      auth: "/auth/*",
+      ledger: "/ledger/*",
+      pagt: "/pagt/*",
+    },
+    examples: [
       "GET /health",
       "GET /routes",
       "GET /auth/google",
-      "GET /auth/google/callback",
       "GET /auth/me",
       "POST /auth/logout",
-      "ledger routes under /ledger/* (auth required)",
-      "pagt routes under /pagt/* (auth required)",
+      "GET /ledger/balance/:id",
+      "POST /ledger/share",
+      "POST /ledger/review-video",
     ],
   });
 });
 
-// Mount routers (THIS is the key)
+/** -------------------------
+ * Routers
+ * ------------------------*/
 app.use("/auth", authRoutes);
 
 function requireAuth(req, res, next) {
@@ -142,10 +158,20 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
 }
 
+// ✅ IMPORTANT: These two lines define the actual URLs:
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/pagt", requireAuth, pagtRoutes);
 
-// app.use("/admin", requireAuth, adminRoutes); // only if file exists + you want it
+/** -------------------------
+ * 404 handler (very helpful)
+ * ------------------------*/
+app.use((req, res) => {
+  res.status(404).json({
+    ok: false,
+    error: "NOT_FOUND",
+    method: req.method,
+    path: req.originalUrl,
+  });
+});
 
-const port = PORT || 3000;
-app.listen(port, () => console.log("API running on", port));
+app.listen(PORT, () => console.log("API running on", PORT));
