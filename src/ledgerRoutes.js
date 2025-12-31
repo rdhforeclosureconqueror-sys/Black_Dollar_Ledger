@@ -5,11 +5,11 @@ import { EarnShareSchema, ReviewVideoSchema } from "./utils/validation.js";
 const r = Router();
 
 // Helper: ensure member exists
-async function ensureMember(member_id) {
+async function ensureMember(id) {
   await query(
     `INSERT INTO members (member_id) VALUES ($1)
      ON CONFLICT (member_id) DO NOTHING`,
-    [member_id]
+    [id]
   );
 }
 
@@ -18,13 +18,13 @@ r.post("/share", async (req, res) => {
   const parsed = EarnShareSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const { member_id, share_platform, share_url, proof_url } = parsed.data;
-  await ensureMember(member_id);
+  const { id, share_platform, share_url, proof_url } = parsed.data;
+  await ensureMember(id);
 
   await query(
-    `INSERT INTO share_events (member_id, share_platform, share_url, proof_url)
+    `INSERT INTO share_events (id, share_platform, share_url, proof_url)
      VALUES ($1,$2,$3,$4)`,
-    [member_id, share_platform, share_url || null, proof_url || null]
+    [id, share_platform, share_url || null, proof_url || null]
   );
 
   res.json({ ok: true, message: "Share logged. Stars are awarded by the shares job (3 shares = 1 STAR)." });
@@ -36,7 +36,7 @@ r.post("/review-video", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const d = parsed.data;
-  await ensureMember(d.member_id);
+  await ensureMember(d.id);
 
   // self-score = number of true items (0–5)
   const score =
@@ -44,10 +44,10 @@ r.post("/review-video", async (req, res) => {
 
   await query(
     `INSERT INTO video_reviews
-     (member_id, business_name, business_address, service_type, what_makes_special, video_url, self_score, checklist_json, status)
+     (id, business_name, business_address, service_type, what_makes_special, video_url, self_score, checklist_json, status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')`,
     [
-      d.member_id,
+      d.id,
       d.business_name,
       d.business_address,
       d.service_type,
@@ -67,24 +67,24 @@ r.post("/review-video", async (req, res) => {
 });
 
 // 3) Balance
-r.get("/balance/:member_id", async (req, res) => {
-  const { member_id } = req.params;
-  await ensureMember(member_id);
+r.get("/balance/:id", async (req, res) => {
+  const { id } = req.params;
+  await ensureMember(id);
 
   const stars = await query(
     `SELECT COALESCE(SUM(delta),0) AS stars
-     FROM star_transactions WHERE member_id=$1`,
-    [member_id]
+     FROM star_transactions WHERE id=$1`,
+    [id]
   );
 
   const bd = await query(
     `SELECT COALESCE(SUM(delta),0) AS bd
-     FROM bd_transactions WHERE member_id=$1`,
-    [member_id]
+     FROM bd_transactions WHERE id=$1`,
+    [id]
   );
 
   res.json({
-    member_id,
+    id,
     stars: Number(stars.rows[0].stars),
     bd: Number(bd.rows[0].bd)
   });
