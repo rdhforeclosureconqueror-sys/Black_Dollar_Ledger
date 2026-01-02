@@ -1,4 +1,4 @@
-// ✅ src/server.js
+// ✅ src/server.js — Simba API Core
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -21,7 +21,7 @@ import notificationsRoutes from "./routes/notifications.js";
 dotenv.config();
 
 // ----------------------------------------------------
-// 1️⃣ Core Setup
+// 1️⃣ App Core Setup
 // ----------------------------------------------------
 const app = express();
 app.set("trust proxy", 1);
@@ -37,8 +37,9 @@ const {
   GOOGLE_CALLBACK_URL,
 } = process.env;
 
-if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET)
+if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET) {
   throw new Error("❌ Missing required environment variables");
+}
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -55,12 +56,12 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
       console.warn("🚫 Blocked by CORS:", origin);
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
+      callback(new Error(`CORS blocked for origin: ${origin}`));
     },
-    credentials: true, // ✅ allow cookies
+    credentials: true, // ✅ allow cookies/sessions cross-domain
   })
 );
 
@@ -75,7 +76,7 @@ export const pool = new Pool({
 
 const PgSession = connectPgSimple(session);
 
-// ✅ dynamic cookie domain (works locally + production)
+// ✅ Dynamic cookie domain for both local + prod
 const cookieDomain =
   NODE_ENV === "production" ? ".simbawaujamaa.com" : undefined;
 
@@ -92,8 +93,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: NODE_ENV === "production", // HTTPS only in prod
-      sameSite: NODE_ENV === "production" ? "none" : "lax", // cross-domain only in prod
+      secure: NODE_ENV === "production",
+      sameSite: NODE_ENV === "production" ? "none" : "lax",
       domain: cookieDomain,
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
@@ -131,7 +132,7 @@ passport.use(
             email = EXCLUDED.email,
             photo = EXCLUDED.photo
           RETURNING role;
-        `,
+          `,
           [
             memberId,
             "google",
@@ -151,10 +152,10 @@ passport.use(
           provider: "google",
         };
 
-        return done(null, user);
+        done(null, user);
       } catch (err) {
         console.error("❌ GoogleStrategy DB error:", err);
-        return done(err, null);
+        done(err, null);
       }
     }
   )
@@ -196,27 +197,30 @@ app.use("/admin", requireAuth, requireAdmin, adminRoutes);
 // ----------------------------------------------------
 // 6️⃣ WebSocket Setup
 // ----------------------------------------------------
-const server = app.listen(PORT, () =>
-  console.log(`🦁 API + WebSocket running on port ${PORT}`)
-);
+const server = app.listen(PORT, () => {
+  console.log(`🦁 Simba API + WebSocket live on port ${PORT}`);
+});
 
 export const clients = new Map();
 
 const wss = new WebSocketServer({ server });
+
 wss.on("connection", (ws) => {
   console.log("🟢 WebSocket connected");
 
   ws.on("message", (msg) => {
     try {
       const parsed = JSON.parse(msg);
+
       if (parsed.type === "register" && parsed.member_id) {
         clients.set(parsed.member_id, ws);
       }
+
       if (parsed.type === "admin_register" && parsed.role === "admin") {
         clients.set(`admin:${parsed.member_id}`, ws);
       }
     } catch (err) {
-      console.error("WS message error:", err);
+      console.error("❌ WS message error:", err);
     }
   });
 
@@ -265,6 +269,7 @@ cron.schedule("*/10 * * * *", async () => {
     WHERE awarded IS FALSE OR awarded IS NULL
     GROUP BY member_id;
   `);
+
   pending.rows.forEach((row) => {
     const remaining = 3 - (row.count % 3);
     if (remaining > 0 && remaining < 3) {
@@ -282,10 +287,13 @@ cron.schedule("*/10 * * * *", async () => {
 });
 
 // ----------------------------------------------------
-// 9️⃣ 404 Fallback
+// 8️⃣ 404 + Error Handlers
 // ----------------------------------------------------
-app.use((req, res) =>
-  res
-    .status(404)
-    .json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
-);
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl });
+});
+
+app.use((err, _req, res, _next) => {
+  console.error("💥 Server error:", err);
+  res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
+});
