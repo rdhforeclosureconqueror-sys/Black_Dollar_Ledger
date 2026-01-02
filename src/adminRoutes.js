@@ -1,41 +1,39 @@
-// src/adminRoutes.js
 import { Router } from "express";
 import { query } from "./db.js";
 
 const r = Router();
 
-// Restrict access to your email or set of admins
 function requireAdmin(req, res, next) {
-  const adminEmails = ["rashad@simbawaujamaa.com", "admin@simbawaujamaa.com"];
+  const adminEmails = [
+    "rdhforeclosureconqueror@gmail.com",
+    "rashad@simbawaujamaa.com",
+    "admin@simbawaujamaa.com",
+  ];
   if (req.user && adminEmails.includes(req.user.email)) return next();
   return res.status(403).json({ ok: false, error: "ADMIN_ONLY" });
 }
 
-// =====================
-// Admin Overview Stats
-// =====================
+// 🧮 Overview Stats
 r.get("/overview", requireAdmin, async (_req, res) => {
   try {
     const members = await query("SELECT COUNT(*) FROM members");
     const shares = await query("SELECT COUNT(*) FROM share_events");
-    const stars = await query("SELECT COALESCE(SUM(delta),0) FROM star_transactions");
-    const bd = await query("SELECT COALESCE(SUM(delta),0) FROM bd_transactions");
+    const stars = await query("SELECT COALESCE(SUM(delta),0) AS total FROM star_transactions");
+    const bd = await query("SELECT COALESCE(SUM(delta),0) AS total FROM bd_transactions");
 
     res.json({
       ok: true,
       member_count: Number(members.rows[0].count),
       total_shares: Number(shares.rows[0].count),
-      total_stars: Number(stars.rows[0].coalesce),
-      total_bd: Number(bd.rows[0].coalesce),
+      total_stars: Number(stars.rows[0].total),
+      total_bd: Number(bd.rows[0].total),
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// =====================
-// Members List
-// =====================
+// 👥 Members List
 r.get("/members", requireAdmin, async (_req, res) => {
   const result = await query(`
     SELECT 
@@ -54,12 +52,10 @@ r.get("/members", requireAdmin, async (_req, res) => {
   res.json({ ok: true, members: result.rows });
 });
 
-// =====================
-// Share Log
-// =====================
+// 🔄 Share Log
 r.get("/shares", requireAdmin, async (_req, res) => {
   const result = await query(`
-    SELECT member_id, share_platform, share_url, proof_url, created_at
+    SELECT member_id, share_platform, share_url, proof_url, awarded, created_at
     FROM share_events
     ORDER BY created_at DESC
     LIMIT 100;
@@ -67,9 +63,7 @@ r.get("/shares", requireAdmin, async (_req, res) => {
   res.json({ ok: true, shares: result.rows });
 });
 
-// =====================
-// Review Videos
-// =====================
+// 🎥 Review Videos
 r.get("/reviews", requireAdmin, async (_req, res) => {
   const result = await query(`
     SELECT id, member_id, business_name, service_type, video_url, status, created_at
@@ -79,9 +73,7 @@ r.get("/reviews", requireAdmin, async (_req, res) => {
   res.json({ ok: true, reviews: result.rows });
 });
 
-// =====================
-// Approve Video Review
-// =====================
+// ✅ Approve Review Video
 r.post("/approve-video/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { stars = 3 } = req.body;
@@ -99,9 +91,7 @@ r.post("/approve-video/:id", requireAdmin, async (req, res) => {
   res.json({ ok: true, message: `Approved review ${id} and awarded ${stars} STARs` });
 });
 
-// =====================
-// Issue Black Dollars
-// =====================
+// 💸 Issue Black Dollars
 r.post("/issue-bd", requireAdmin, async (req, res) => {
   const { member_id, amount, reason } = req.body;
   if (!member_id || !amount)
@@ -114,9 +104,7 @@ r.post("/issue-bd", requireAdmin, async (req, res) => {
   res.json({ ok: true, message: `Issued ${amount} BD to ${member_id}` });
 });
 
-// =====================
-// Activity Stream
-// =====================
+// 📜 Unified Activity Stream
 r.get("/activity-stream", requireAdmin, async (_req, res) => {
   const result = await query(`
     SELECT 'STAR' AS type, member_id, delta, reason, created_at FROM star_transactions
