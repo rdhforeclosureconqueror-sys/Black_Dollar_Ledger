@@ -7,12 +7,11 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import pg from "pg";
 import connectPgSimple from "connect-pg-simple";
-import cron from 'node-cron';
-import { awardStarsFromSharesJob } from './jobs/awardStarsFromShares.js';
-
-cron.schedule('*/5 * * * *', () => {
-  awardStarsFromSharesJob();
-});
+import http from "http";
+import { WebSocketServer } from "ws";
+import cron from "node-cron";
+import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
+import { query } from "./db.js"; // assuming db.js exports your query pool
 
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
@@ -21,7 +20,52 @@ import pagtRoutes from "./pagtRoutes.js";
 dotenv.config();
 
 const app = express();
-app.set("trust proxy", 1);
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+/* -------------------------
+ *  WebSocket live notifier
+ * ------------------------*/
+const activeClients = new Set();
+
+wss.on("connection", (ws, req) => {
+  console.log("🟢 Client connected to WebSocket");
+  activeClients.add(ws);
+
+  ws.on("close", () => {
+    activeClients.delete(ws);
+    console.log("🔴 Client disconnected");
+  });
+});
+
+// Helper: broadcast to all connected clients
+function broadcastNotification(payload) {
+  const msg = JSON.stringify(payload);
+  for (const client of activeClients) {
+    if (client.readyState === 1) client.send(msg);
+  }
+}
+
+/* -------------------------
+ *  CRON: STAR awarding job
+ * ------------------------*/
+cron.schedule("*/5 * * * *", async () => {
+  console.log("⏳ Running STAR award job...");
+  const awarded = await awardStarsFromSharesJob();
+  // Notify connected clients when new stars are awarded
+  if (awarded?.length) {
+    for (const award of awarded) {
+      broadcastNotification({
+        type: "star_award",
+        member_id: award.member_id,
+        delta: award.stars_awarded,
+        message: `⭐ You just earned ${award.stars_awarded} STAR${
+          award.stars_awarded > 1 ? "s" : ""
+        }!`,
+      });
+    }
+  }
+});
 
 const {
   NODE_ENV = "production",
@@ -43,8 +87,8 @@ if (!GOOGLE_CALLBACK_URL) throw new Error("Missing GOOGLE_CALLBACK_URL");
 
 app.use(express.json({ limit: "10mb" }));
 
-/** -------------------------
- * CORS (cookies supported)
+/* -------------------------
+ *  CORS
  * ------------------------*/
 const allowedOrigins = new Set([
   APP_BASE_URL,
@@ -56,7 +100,6 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow server-to-server / curl / render health checks
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked origin: ${origin}`));
@@ -65,8 +108,8 @@ app.use(
   })
 );
 
-/** -------------------------
- * Postgres Pool + Sessions
+/* -------------------------
+ *  Postgres + Session Store
  * ------------------------*/
 const { Pool } = pg;
 const pool = new Pool({
@@ -103,8 +146,8 @@ app.use(passport.session());
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-/** -------------------------
- * Google OAuth
+/* -------------------------
+ *  Google OAuth
  * ------------------------*/
 passport.use(
   new GoogleStrategy(
@@ -114,10 +157,9 @@ passport.use(
       callbackURL: GOOGLE_CALLBACK_URL,
     },
     async (_accessToken, _refreshToken, profile, done) => {
-      // ✅ This is your "session user". DB member row creation happens in /ledger routes.
       const user = {
         provider: "google",
-        id: profile.id, // ✅ make id explicit
+        id: profile.id,
         googleId: profile.id,
         displayName: profile.displayName,
         email: profile.emails?.[0]?.value ?? null,
@@ -128,8 +170,8 @@ passport.use(
   )
 );
 
-/** -------------------------
- * Health + Route Map
+/* -------------------------
+ *  Health + Info
  * ------------------------*/
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -143,19 +185,15 @@ app.get("/routes", (_req, res) => {
     },
     examples: [
       "GET /health",
-      "GET /routes",
-      "GET /auth/google",
       "GET /auth/me",
-      "POST /auth/logout",
-      "GET /ledger/balance/:id",
       "POST /ledger/share",
       "POST /ledger/review-video",
     ],
   });
 });
 
-/** -------------------------
- * Routers
+/* -------------------------
+ *  Routers + Middleware
  * ------------------------*/
 app.use("/auth", authRoutes);
 
@@ -164,12 +202,23 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
 }
 
-// ✅ IMPORTANT: These two lines define the actual URLs:
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/pagt", requireAuth, pagtRoutes);
 
-/** -------------------------
- * 404 handler (very helpful)
+/* -------------------------
+ *  New: Notifications Endpoint
+ * ------------------------*/
+app.get("/ledger/notifications", requireAuth, async (req, res) => {
+  const { id } = req.user;
+  const notifications = await query(
+    `SELECT * FROM notifications WHERE member_id=$1 ORDER BY created_at DESC LIMIT 10`,
+    [id]
+  );
+  res.json({ ok: true, items: notifications.rows });
+});
+
+/* -------------------------
+ *  404 Handler
  * ------------------------*/
 app.use((req, res) => {
   res.status(404).json({
@@ -180,4 +229,4 @@ app.use((req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log("API running on", PORT));
+server.listen(PORT, () => console.log(`🦁 API + WS running on port ${PORT}`));
