@@ -1,53 +1,64 @@
-import { query } from '../db.js';
+// src/jobs/awardStarsFromShares.js
+import { query } from "../db.js";
+import { notifyMember, broadcastToAdmins } from "../utils/wsBroadcast.js";
 
 /**
- * Run periodically (every 5 min or via cron).
- * Checks who has 3+ unawarded share_events and grants 1 STAR per group of 3.
+ * 🏆 Award 1 STAR for every 3 unawarded shares
  */
-export async function awardStarsFromSharesJob() {
-  const client = await query.connect?.() ?? query; // handle both pool/query exports
+export async function awardStarsFromSharesJob(pool) {
   try {
-    await client.query('BEGIN');
-
-    // Find eligible members
-    const res = await client.query(`
+    const pending = await query(`
       SELECT member_id, COUNT(*) AS share_count
       FROM share_events
-      WHERE awarded = false
-      GROUP BY member_id
-      HAVING COUNT(*) >= 3
+      WHERE awarded IS FALSE OR awarded IS NULL
+      GROUP BY member_id;
     `);
 
-    for (const row of res.rows) {
-      const { member_id, share_count } = row;
-      const starsToAward = Math.floor(share_count / 3);
-      const sharesToMark = starsToAward * 3;
+    const newAwards = [];
 
-      if (starsToAward > 0) {
-        await client.query(
-          `INSERT INTO star_transactions (member_id, delta, reason)
-           VALUES ($1,$2,$3)`,
-          [member_id, starsToAward, 'Automatic award: 3 shares = 1 STAR']
-        );
+    for (const row of pending.rows) {
+      const count = Number(row.share_count);
+      const starsToAward = Math.floor(count / 3);
+      if (starsToAward <= 0) continue;
 
-        await client.query(
-          `UPDATE share_events
-             SET awarded = true
-           WHERE member_id=$1
-             AND awarded = false
-           ORDER BY created_at
-           LIMIT $2`,
-          [member_id, sharesToMark]
-        );
-      }
+      // Award stars
+      await query(
+        `INSERT INTO star_transactions (member_id, delta, reason)
+         VALUES ($1, $2, $3)`,
+        [row.member_id, starsToAward, "3 verified shares = 1 STAR"]
+      );
+
+      // Mark shares as awarded
+      await query(
+        `UPDATE share_events
+         SET awarded = TRUE
+         WHERE member_id = $1
+         AND awarded IS FALSE
+         LIMIT $2`,
+        [row.member_id, starsToAward * 3]
+      );
+
+      newAwards.push({ member_id: row.member_id, delta: starsToAward });
+
+      // 📨 Notify the member
+      notifyMember(row.member_id, {
+        type: "star_award",
+        message: `⭐ Congrats! You earned ${starsToAward} STAR for your shares!`,
+      });
+
+      // 🦁 Notify admins
+      broadcastToAdmins({
+        type: "star_award_event",
+        member_id: row.member_id,
+        delta: starsToAward,
+        timestamp: new Date().toISOString(),
+      });
     }
 
-    await client.query('COMMIT');
-    console.log('✅ STAR award job completed successfully.');
+    console.log(`🏁 STAR share job complete (${newAwards.length} awarded)`);
+    return newAwards;
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ STAR award job failed:', err);
-  } finally {
-    if (client.release) client.release();
+    console.error("Error in awardStarsFromSharesJob:", err);
+    return [];
   }
 }
