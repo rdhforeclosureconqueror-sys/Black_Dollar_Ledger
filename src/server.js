@@ -18,12 +18,11 @@ import pagtRoutes from "./pagtRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import notificationsRoutes from "./routes/notifications.js";
 
-// 🔹 Load environment
 dotenv.config();
 
-// ------------------------------------
-// 1️⃣ Core Setup
-// ------------------------------------
+// -------------------------------------------------
+// 1️⃣ Express Core Setup
+// -------------------------------------------------
 const app = express();
 app.set("trust proxy", 1);
 
@@ -44,23 +43,19 @@ if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET) {
 
 app.use(express.json({ limit: "10mb" }));
 
-// ------------------------------------
-// 2️⃣ CORS
-// ------------------------------------
-const allowedOrigins = [APP_BASE_URL];
+// -------------------------------------------------
+// 2️⃣ CORS Configuration
+// -------------------------------------------------
 app.use(
   cors({
-    origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked origin: ${origin}`));
-    },
+    origin: [APP_BASE_URL],
     credentials: true,
   })
 );
 
-// ------------------------------------
-// 3️⃣ Database + Session Store
-// ------------------------------------
+// -------------------------------------------------
+// 3️⃣ PostgreSQL + Session Store
+// -------------------------------------------------
 const { Pool } = pg;
 export const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -68,6 +63,7 @@ export const pool = new Pool({
 });
 
 const PgSession = connectPgSimple(session);
+
 app.use(
   session({
     name: "bd.sid",
@@ -82,15 +78,16 @@ app.use(
     cookie: {
       httpOnly: true,
       secure: NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
+      sameSite: "none", // ✅ required for cross-domain (frontend + api)
+      domain: ".simbawaujamaa.com", // ✅ allow sharing cookies between domains
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   })
 );
 
-// ------------------------------------
-// 4️⃣ Passport Auth (Google)
-// ------------------------------------
+// -------------------------------------------------
+// 4️⃣ Google OAuth Setup
+// -------------------------------------------------
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -107,18 +104,18 @@ passport.use(
     async (_a, _r, profile, done) => {
       const email = profile.emails?.[0]?.value ?? null;
       const memberId = profile.id;
+
       try {
-        // ensure member record
         const result = await pool.query(
           `
           INSERT INTO members (member_id, provider, display_name, email, photo)
           VALUES ($1,$2,$3,$4,$5)
-          ON CONFLICT (member_id) DO UPDATE
-            SET display_name = EXCLUDED.display_name,
-                email = EXCLUDED.email,
-                photo = EXCLUDED.photo
+          ON CONFLICT (member_id)
+          DO UPDATE SET display_name = EXCLUDED.display_name,
+                        email = EXCLUDED.email,
+                        photo = EXCLUDED.photo
           RETURNING role;
-          `,
+        `,
           [memberId, "google", profile.displayName, email, profile.photos?.[0]?.value ?? null]
         );
 
@@ -131,18 +128,19 @@ passport.use(
           photo: profile.photos?.[0]?.value ?? null,
           role: result.rows[0]?.role || "user",
         };
+
         return done(null, user);
       } catch (err) {
-        console.error("Error syncing member:", err);
+        console.error("❌ GoogleStrategy DB error:", err);
         return done(err, null);
       }
     }
   )
 );
 
-// ------------------------------------
-// 5️⃣ Middleware + Routes
-// ------------------------------------
+// -------------------------------------------------
+// 5️⃣ Auth Middleware + Routes
+// -------------------------------------------------
 function requireAuth(req, res, next) {
   if (req.user) return next();
   return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
@@ -162,24 +160,26 @@ app.get("/health", (_req, res) =>
   res.json({ ok: true, message: "🦁 Simba Ledger API healthy" })
 );
 
+// ✅ Mount main routes
 app.use("/auth", authRoutes);
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/ledger/notifications", requireAuth, notificationsRoutes);
 app.use("/pagt", requireAuth, pagtRoutes);
 app.use("/admin", requireAuth, requireAdmin, adminRoutes);
 
-// ------------------------------------
-// 6️⃣ WebSocket Server
-// ------------------------------------
-const server = app.listen(PORT, () => {
-  console.log(`🦁 API + WS running on port ${PORT}`);
-});
+// -------------------------------------------------
+// 6️⃣ WebSocket + Realtime Notifications
+// -------------------------------------------------
+const server = app.listen(PORT, () =>
+  console.log(`🦁 API + WS running on port ${PORT}`)
+);
 
 export const clients = new Map();
 
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   console.log("🟢 WebSocket connected");
+
   ws.on("message", (msg) => {
     try {
       const parsed = JSON.parse(msg);
@@ -189,18 +189,19 @@ wss.on("connection", (ws) => {
       }
       if (parsed.type === "admin_register" && parsed.role === "admin") {
         clients.set(`admin:${parsed.member_id}`, ws);
-        ws.send(JSON.stringify({ type: "ack", message: "Admin connected" }));
+        ws.send(JSON.stringify({ type: "ack", message: "Admin dashboard connected" }));
       }
     } catch (err) {
       console.error("WS message error:", err);
     }
   });
-  ws.on("close", () => console.log("🔴 WS disconnected"));
+
+  ws.on("close", () => console.log("🔴 WebSocket disconnected"));
 });
 
-// ------------------------------------
-// 7️⃣ Cron Jobs
-// ------------------------------------
+// -------------------------------------------------
+// 7️⃣ Cron: STAR + Reminder Jobs
+// -------------------------------------------------
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR award job...");
   const newAwards = await awardStarsFromSharesJob(pool);
@@ -216,7 +217,6 @@ cron.schedule("*/5 * * * *", async () => {
       );
     }
 
-    // notify admins
     for (const [key, socket] of clients.entries()) {
       if (key.startsWith("admin:") && socket.readyState === 1) {
         socket.send(
@@ -233,7 +233,7 @@ cron.schedule("*/5 * * * *", async () => {
 });
 
 cron.schedule("*/10 * * * *", async () => {
-  console.log("🔔 Checking for share reminders...");
+  console.log("🔔 Checking share reminders...");
   const pending = await pool.query(`
     SELECT member_id, COUNT(*) AS count
     FROM share_events
@@ -258,9 +258,12 @@ cron.schedule("*/10 * * * *", async () => {
   });
 });
 
-// ------------------------------------
-// 9️⃣ 404 Fallback
-// ------------------------------------
+// -------------------------------------------------
+// 9️⃣ 404 Catch-All
+// -------------------------------------------------
 app.use((req, res) =>
-  res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
+  res
+    .status(404)
+    .json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
 );
+
