@@ -1,119 +1,152 @@
+// src/routes/adminRoutes.js (BACKEND)
 import { Router } from "express";
-import { query } from "./db.js";
+import { query } from "../db.js"; // or adjust if your query function is in another file
 
 const r = Router();
 
-function requireAdmin(req, res, next) {
-  const adminEmails = [
-    "rdhforeclosureconqueror@gmail.com",
-    "rashad@simbawaujamaa.com",
-    "admin@simbawaujamaa.com",
-  ];
-  if (req.user && adminEmails.includes(req.user.email)) return next();
-  return res.status(403).json({ ok: false, error: "ADMIN_ONLY" });
-}
+// Middleware already applied in server.js: requireAuth + requireAdmin
+// So this file assumes the user is admin.
 
-// 🧮 Overview Stats
-r.get("/overview", requireAdmin, async (_req, res) => {
+// ---------------------------------------------
+// 1️⃣ Admin Overview Stats
+// ---------------------------------------------
+r.get("/overview", async (_req, res) => {
   try {
     const members = await query("SELECT COUNT(*) FROM members");
     const shares = await query("SELECT COUNT(*) FROM share_events");
-    const stars = await query("SELECT COALESCE(SUM(delta),0) AS total FROM star_transactions");
-    const bd = await query("SELECT COALESCE(SUM(delta),0) AS total FROM bd_transactions");
+    const stars = await query("SELECT COALESCE(SUM(delta),0) FROM star_transactions");
+    const bd = await query("SELECT COALESCE(SUM(delta),0) FROM bd_transactions");
+
+    const platformBreakdown = await query(`
+      SELECT share_platform AS platform, COUNT(*) AS count
+      FROM share_events
+      GROUP BY share_platform
+      ORDER BY count DESC;
+    `);
+
+    const recentActivity = await query(`
+      SELECT m.display_name, 'Share' AS category, s.created_at
+      FROM share_events s
+      JOIN members m ON s.member_id = m.member_id
+      UNION ALL
+      SELECT m.display_name, 'Review Video' AS category, v.created_at
+      FROM video_reviews v
+      JOIN members m ON v.member_id = m.member_id
+      ORDER BY created_at DESC
+      LIMIT 20;
+    `);
 
     res.json({
       ok: true,
-      member_count: Number(members.rows[0].count),
-      total_shares: Number(shares.rows[0].count),
-      total_stars: Number(stars.rows[0].total),
-      total_bd: Number(bd.rows[0].total),
+      stats: {
+        members_total: Number(members.rows[0].count),
+        shares_total: Number(shares.rows[0].count),
+        stars_total: Number(stars.rows[0].coalesce),
+        bd_total: Number(bd.rows[0].coalesce),
+      },
+      platformBreakdown: platformBreakdown.rows,
+      recentActivity: recentActivity.rows,
     });
   } catch (err) {
+    console.error("Error /admin/overview:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// 👥 Members List
-r.get("/members", requireAdmin, async (_req, res) => {
-  const result = await query(`
-    SELECT 
-      m.member_id,
-      m.display_name,
-      m.email,
-      m.created_at,
-      COALESCE(SUM(s.delta), 0) AS stars,
-      COALESCE(SUM(b.delta), 0) AS bd
-    FROM members m
-    LEFT JOIN star_transactions s ON s.member_id = m.member_id
-    LEFT JOIN bd_transactions b ON b.member_id = m.member_id
-    GROUP BY m.member_id, m.display_name, m.email, m.created_at
-    ORDER BY stars DESC;
-  `);
-  res.json({ ok: true, members: result.rows });
+// ---------------------------------------------
+// 2️⃣ Members List
+// ---------------------------------------------
+r.get("/members", async (_req, res) => {
+  try {
+    const members = await query(`
+      SELECT 
+        m.member_id,
+        m.display_name,
+        m.email,
+        m.role,
+        m.created_at,
+        COALESCE(SUM(s.delta), 0) AS stars,
+        COALESCE(SUM(b.delta), 0) AS bd
+      FROM members m
+      LEFT JOIN star_transactions s ON s.member_id = m.member_id
+      LEFT JOIN bd_transactions b ON b.member_id = m.member_id
+      GROUP BY m.member_id, m.display_name, m.email, m.role, m.created_at
+      ORDER BY m.created_at DESC;
+    `);
+    res.json({ ok: true, members: members.rows });
+  } catch (err) {
+    console.error("Error /admin/members:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
-// 🔄 Share Log
-r.get("/shares", requireAdmin, async (_req, res) => {
-  const result = await query(`
-    SELECT member_id, share_platform, share_url, proof_url, awarded, created_at
-    FROM share_events
-    ORDER BY created_at DESC
-    LIMIT 100;
-  `);
-  res.json({ ok: true, shares: result.rows });
+// ---------------------------------------------
+// 3️⃣ Review Management
+// ---------------------------------------------
+r.get("/reviews", async (_req, res) => {
+  try {
+    const reviews = await query(`
+      SELECT 
+        v.id,
+        v.member_id,
+        m.display_name,
+        v.business_name,
+        v.service_type,
+        v.video_url,
+        v.status,
+        v.created_at
+      FROM video_reviews v
+      JOIN members m ON m.member_id = v.member_id
+      ORDER BY v.created_at DESC;
+    `);
+    res.json({ ok: true, reviews: reviews.rows });
+  } catch (err) {
+    console.error("Error /admin/reviews:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
-// 🎥 Review Videos
-r.get("/reviews", requireAdmin, async (_req, res) => {
-  const result = await query(`
-    SELECT id, member_id, business_name, service_type, video_url, status, created_at
-    FROM video_reviews
-    ORDER BY created_at DESC;
-  `);
-  res.json({ ok: true, reviews: result.rows });
-});
-
-// ✅ Approve Review Video
-r.post("/approve-video/:id", requireAdmin, async (req, res) => {
+r.post("/approve-video/:id", async (req, res) => {
   const { id } = req.params;
   const { stars = 3 } = req.body;
 
-  const review = await query("SELECT member_id FROM video_reviews WHERE id=$1", [id]);
-  if (!review.rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-  const memberId = review.rows[0].member_id;
+  try {
+    const review = await query("SELECT member_id FROM video_reviews WHERE id=$1", [id]);
+    if (!review.rows.length)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    const memberId = review.rows[0].member_id;
 
-  await query("UPDATE video_reviews SET status='approved' WHERE id=$1", [id]);
-  await query(
-    "INSERT INTO star_transactions (member_id, delta, reason) VALUES ($1,$2,$3)",
-    [memberId, stars, "Review video approved"]
-  );
+    await query("UPDATE video_reviews SET status='approved' WHERE id=$1", [id]);
+    await query(
+      "INSERT INTO star_transactions (member_id, delta, reason) VALUES ($1,$2,$3)",
+      [memberId, stars, "Review video approved by admin"]
+    );
 
-  res.json({ ok: true, message: `Approved review ${id} and awarded ${stars} STARs` });
+    res.json({ ok: true, message: `✅ Approved review ${id}, awarded ${stars} STARs` });
+  } catch (err) {
+    console.error("Error approving review:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
-// 💸 Issue Black Dollars
-r.post("/issue-bd", requireAdmin, async (req, res) => {
+// ---------------------------------------------
+// 4️⃣ Issue BD (Black Dollars)
+// ---------------------------------------------
+r.post("/issue-bd", async (req, res) => {
   const { member_id, amount, reason } = req.body;
   if (!member_id || !amount)
     return res.status(400).json({ ok: false, error: "Missing required fields" });
 
-  await query(
-    "INSERT INTO bd_transactions (member_id, delta, reason) VALUES ($1,$2,$3)",
-    [member_id, amount, reason || "Admin grant"]
-  );
-  res.json({ ok: true, message: `Issued ${amount} BD to ${member_id}` });
-});
-
-// 📜 Unified Activity Stream
-r.get("/activity-stream", requireAdmin, async (_req, res) => {
-  const result = await query(`
-    SELECT 'STAR' AS type, member_id, delta, reason, created_at FROM star_transactions
-    UNION ALL
-    SELECT 'BD' AS type, member_id, delta, reason, created_at FROM bd_transactions
-    ORDER BY created_at DESC
-    LIMIT 100;
-  `);
-  res.json({ ok: true, items: result.rows });
+  try {
+    await query(
+      "INSERT INTO bd_transactions (member_id, delta, reason) VALUES ($1,$2,$3)",
+      [member_id, amount, reason || "Admin grant"]
+    );
+    res.json({ ok: true, message: `💰 Issued ${amount} BD to ${member_id}` });
+  } catch (err) {
+    console.error("Error issuing BD:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 export default r;
