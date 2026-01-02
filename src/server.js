@@ -10,7 +10,7 @@ import connectPgSimple from "connect-pg-simple";
 import cron from "node-cron";
 import { WebSocketServer } from "ws";
 
-// Jobs + Routes
+// 🔹 Jobs + Routes
 import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
@@ -18,7 +18,7 @@ import pagtRoutes from "./pagtRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import notificationsRoutes from "./routes/notifications.js";
 
-// Load environment
+// 🔹 Load environment
 dotenv.config();
 
 // ------------------------------------
@@ -105,16 +105,37 @@ passport.use(
       callbackURL: GOOGLE_CALLBACK_URL,
     },
     async (_a, _r, profile, done) => {
-      const user = {
-        provider: "google",
-        id: profile.id,
-        googleId: profile.id,
-        displayName: profile.displayName,
-        email: profile.emails?.[0]?.value ?? null,
-        photo: profile.photos?.[0]?.value ?? null,
-        role: "user", // default; admin role is assigned in DB
-      };
-      return done(null, user);
+      const email = profile.emails?.[0]?.value ?? null;
+      const memberId = profile.id;
+      try {
+        // ensure member record
+        const result = await pool.query(
+          `
+          INSERT INTO members (member_id, provider, display_name, email, photo)
+          VALUES ($1,$2,$3,$4,$5)
+          ON CONFLICT (member_id) DO UPDATE
+            SET display_name = EXCLUDED.display_name,
+                email = EXCLUDED.email,
+                photo = EXCLUDED.photo
+          RETURNING role;
+          `,
+          [memberId, "google", profile.displayName, email, profile.photos?.[0]?.value ?? null]
+        );
+
+        const user = {
+          provider: "google",
+          id: memberId,
+          googleId: profile.id,
+          displayName: profile.displayName,
+          email,
+          photo: profile.photos?.[0]?.value ?? null,
+          role: result.rows[0]?.role || "user",
+        };
+        return done(null, user);
+      } catch (err) {
+        console.error("Error syncing member:", err);
+        return done(err, null);
+      }
     }
   )
 );
@@ -137,12 +158,10 @@ function requireAdmin(req, res, next) {
   return res.status(403).json({ ok: false, error: "ACCESS_DENIED" });
 }
 
-// 🩺 Health check
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, message: "🦁 Simba Ledger API healthy" });
-});
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, message: "🦁 Simba Ledger API healthy" })
+);
 
-// Mount routers
 app.use("/auth", authRoutes);
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/ledger/notifications", requireAuth, notificationsRoutes);
@@ -156,12 +175,11 @@ const server = app.listen(PORT, () => {
   console.log(`🦁 API + WS running on port ${PORT}`);
 });
 
-export const clients = new Map(); // 🧠 make accessible to utils
+export const clients = new Map();
 
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
-  console.log("🟢 WebSocket client connected");
-
+  console.log("🟢 WebSocket connected");
   ws.on("message", (msg) => {
     try {
       const parsed = JSON.parse(msg);
@@ -171,18 +189,17 @@ wss.on("connection", (ws) => {
       }
       if (parsed.type === "admin_register" && parsed.role === "admin") {
         clients.set(`admin:${parsed.member_id}`, ws);
-        ws.send(JSON.stringify({ type: "ack", message: "Admin dashboard connected" }));
+        ws.send(JSON.stringify({ type: "ack", message: "Admin connected" }));
       }
     } catch (err) {
       console.error("WS message error:", err);
     }
   });
-
-  ws.on("close", () => console.log("🔴 WebSocket client disconnected"));
+  ws.on("close", () => console.log("🔴 WS disconnected"));
 });
 
 // ------------------------------------
-// 7️⃣ Cron: STAR Award Job
+// 7️⃣ Cron Jobs
 // ------------------------------------
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR award job...");
@@ -199,7 +216,7 @@ cron.schedule("*/5 * * * *", async () => {
       );
     }
 
-    // Notify all admin dashboards
+    // notify admins
     for (const [key, socket] of clients.entries()) {
       if (key.startsWith("admin:") && socket.readyState === 1) {
         socket.send(
@@ -215,9 +232,6 @@ cron.schedule("*/5 * * * *", async () => {
   });
 });
 
-// ------------------------------------
-// 8️⃣ Cron: Share Reminder
-// ------------------------------------
 cron.schedule("*/10 * * * *", async () => {
   console.log("🔔 Checking for share reminders...");
   const pending = await pool.query(`
@@ -247,8 +261,6 @@ cron.schedule("*/10 * * * *", async () => {
 // ------------------------------------
 // 9️⃣ 404 Fallback
 // ------------------------------------
-app.use((req, res) => {
-  res
-    .status(404)
-    .json({ ok: false, error: "NOT_FOUND", path: req.originalUrl });
-});
+app.use((req, res) =>
+  res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
+);
