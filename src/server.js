@@ -14,6 +14,8 @@ import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
+import adminRoutes from "./adminRoutes.js";
+app.use("/admin", requireAuth, adminRoutes);
 
 dotenv.config();
 
