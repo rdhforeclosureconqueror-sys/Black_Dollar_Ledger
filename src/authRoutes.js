@@ -1,4 +1,3 @@
-// src/authRoutes.js
 import { Router } from "express";
 import passport from "passport";
 import { pool } from "./server.js";
@@ -28,9 +27,18 @@ r.get(
   async (req, res) => {
     try {
       const userId = req.user?.id;
-      const result = await pool.query("SELECT role FROM members WHERE member_id=$1", [userId]);
+      const result = await pool.query(
+        "SELECT role FROM members WHERE member_id=$1",
+        [userId]
+      );
       req.user.role = result.rows[0]?.role || "user";
+
+      // ✅ Explicitly persist updated user into session
       req.session.passport.user = req.user;
+      await new Promise((resolve, reject) => {
+        req.session.save((err) => (err ? reject(err) : resolve()));
+      });
+
       res.redirect(`${getAppBaseUrl()}/`);
     } catch (err) {
       console.error("Error setting user role:", err);
@@ -41,11 +49,22 @@ r.get(
 
 // 3️⃣ /me
 r.get("/me", async (req, res) => {
-  if (!req.user) return res.status(401).json({ ok: false, auth: false });
+  if (!req.user)
+    return res.status(401).json({ ok: false, auth: false });
+
   try {
-    const roleCheck = await pool.query("SELECT role FROM members WHERE member_id=$1", [req.user.id]);
+    const roleCheck = await pool.query(
+      "SELECT role FROM members WHERE member_id=$1",
+      [req.user.id]
+    );
     const role = roleCheck.rows[0]?.role || "user";
-    res.json({ ok: true, auth: true, user: { ...req.user, role } });
+
+    // ✅ Always include latest role
+    res.json({
+      ok: true,
+      auth: true,
+      user: { ...req.user, role },
+    });
   } catch (err) {
     console.error("Error /auth/me:", err);
     res.json({ ok: true, auth: true, user: req.user });
@@ -53,7 +72,9 @@ r.get("/me", async (req, res) => {
 });
 
 // 4️⃣ Status
-r.get("/status", (req, res) => res.json({ ok: true, auth: !!req.user }));
+r.get("/status", (req, res) =>
+  res.json({ ok: true, auth: !!req.user })
+);
 
 // 5️⃣ Logout
 r.post("/logout", (req, res, next) => {
@@ -71,6 +92,8 @@ r.post("/logout", (req, res, next) => {
 });
 
 // 6️⃣ Fail
-r.get("/fail", (_req, res) => res.status(401).send("Google login failed"));
+r.get("/fail", (_req, res) =>
+  res.status(401).send("Google login failed")
+);
 
 export default r;
