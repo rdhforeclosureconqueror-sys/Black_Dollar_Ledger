@@ -1,4 +1,4 @@
-// src/server.js
+// src/server.js (BACKEND)
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -10,7 +10,7 @@ import connectPgSimple from "connect-pg-simple";
 import cron from "node-cron";
 import { WebSocketServer } from "ws";
 
-// Routes + Jobs
+// Jobs + Routes
 import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
@@ -18,12 +18,15 @@ import pagtRoutes from "./pagtRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import notificationsRoutes from "./routes/notifications.js";
 
+// Load environment
 dotenv.config();
 
+// ------------------------------------
+// 1️⃣ Core Setup
+// ------------------------------------
 const app = express();
 app.set("trust proxy", 1);
 
-// 🧠 Environment Setup
 const {
   NODE_ENV = "production",
   PORT = process.env.PORT || 3000,
@@ -35,35 +38,44 @@ const {
   GOOGLE_CALLBACK_URL,
 } = process.env;
 
-if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET)
-  throw new Error("Missing required environment variables");
+if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET) {
+  throw new Error("❌ Missing required environment variables");
+}
 
 app.use(express.json({ limit: "10mb" }));
 
-// 🌐 CORS
+// ------------------------------------
+// 2️⃣ CORS
+// ------------------------------------
 const allowedOrigins = [APP_BASE_URL];
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      cb(new Error(`CORS blocked origin: ${origin}`));
+      return cb(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
   })
 );
 
-// 🧩 Database + Session Store
+// ------------------------------------
+// 3️⃣ Database + Session Store
+// ------------------------------------
 const { Pool } = pg;
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
-const PgSession = connectPgSimple(session);
 
+const PgSession = connectPgSimple(session);
 app.use(
   session({
     name: "bd.sid",
-    store: new PgSession({ pool, tableName: "session", createTableIfMissing: true }),
+    store: new PgSession({
+      pool,
+      tableName: "session",
+      createTableIfMissing: true,
+    }),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
@@ -76,7 +88,9 @@ app.use(
   })
 );
 
-// 🔐 Passport
+// ------------------------------------
+// 4️⃣ Passport Auth (Google)
+// ------------------------------------
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -98,49 +112,63 @@ passport.use(
         displayName: profile.displayName,
         email: profile.emails?.[0]?.value ?? null,
         photo: profile.photos?.[0]?.value ?? null,
+        role: "user", // default; admin role is assigned in DB
       };
       return done(null, user);
     }
   )
 );
 
-// ✅ Middleware
+// ------------------------------------
+// 5️⃣ Middleware + Routes
+// ------------------------------------
 function requireAuth(req, res, next) {
   if (req.user) return next();
-  res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
+  return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user && req.user.role === "admin") return next();
-  res.status(403).json({ ok: false, error: "ACCESS_DENIED" });
+  const adminEmails = [
+    "rdhforeclosureconqueror@gmail.com",
+    "rashad@simbawaujamaa.com",
+    "admin@simbawaujamaa.com",
+  ];
+  if (req.user && adminEmails.includes(req.user.email)) return next();
+  return res.status(403).json({ ok: false, error: "ACCESS_DENIED" });
 }
 
-// 🩺 Health
-app.get("/health", (_req, res) => res.json({ ok: true, message: "🦁 Simba Ledger API healthy" }));
+// 🩺 Health check
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, message: "🦁 Simba Ledger API healthy" });
+});
 
-// 🛣️ Routes
+// Mount routers
 app.use("/auth", authRoutes);
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/ledger/notifications", requireAuth, notificationsRoutes);
 app.use("/pagt", requireAuth, pagtRoutes);
 app.use("/admin", requireAuth, requireAdmin, adminRoutes);
 
-// 🕸️ WebSocket Setup
-const server = app.listen(PORT, () => console.log(`🦁 API + WS running on port ${PORT}`));
-const wss = new WebSocketServer({ server });
-const clients = new Map();
+// ------------------------------------
+// 6️⃣ WebSocket Server
+// ------------------------------------
+const server = app.listen(PORT, () => {
+  console.log(`🦁 API + WS running on port ${PORT}`);
+});
 
+export const clients = new Map(); // 🧠 make accessible to utils
+
+const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
   console.log("🟢 WebSocket client connected");
+
   ws.on("message", (msg) => {
     try {
       const parsed = JSON.parse(msg);
-
       if (parsed.type === "register" && parsed.member_id) {
         clients.set(parsed.member_id, ws);
         ws.send(JSON.stringify({ type: "ack", message: "Registered for updates" }));
       }
-
       if (parsed.type === "admin_register" && parsed.role === "admin") {
         clients.set(`admin:${parsed.member_id}`, ws);
         ws.send(JSON.stringify({ type: "ack", message: "Admin dashboard connected" }));
@@ -149,22 +177,17 @@ wss.on("connection", (ws) => {
       console.error("WS message error:", err);
     }
   });
-  ws.on("close", () => console.log("🔴 WS client disconnected"));
+
+  ws.on("close", () => console.log("🔴 WebSocket client disconnected"));
 });
 
-// 🚀 Helper: Broadcast to admins
-function notifyAdmins(payload) {
-  for (const [key, ws] of clients.entries()) {
-    if (key.startsWith("admin:") && ws.readyState === 1) {
-      ws.send(JSON.stringify(payload));
-    }
-  }
-}
-
-// 🕒 CRON: STAR Award Job
+// ------------------------------------
+// 7️⃣ Cron: STAR Award Job
+// ------------------------------------
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR award job...");
   const newAwards = await awardStarsFromSharesJob(pool);
+
   newAwards.forEach((award) => {
     const ws = clients.get(award.member_id);
     if (ws && ws.readyState === 1) {
@@ -175,16 +198,26 @@ cron.schedule("*/5 * * * *", async () => {
         })
       );
     }
-    notifyAdmins({
-      type: "star_award_event",
-      member_id: award.member_id,
-      delta: award.delta,
-      timestamp: new Date().toISOString(),
-    });
+
+    // Notify all admin dashboards
+    for (const [key, socket] of clients.entries()) {
+      if (key.startsWith("admin:") && socket.readyState === 1) {
+        socket.send(
+          JSON.stringify({
+            type: "star_award_event",
+            member_id: award.member_id,
+            delta: award.delta,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      }
+    }
   });
 });
 
-// 🔔 CRON: Share Reminder
+// ------------------------------------
+// 8️⃣ Cron: Share Reminder
+// ------------------------------------
 cron.schedule("*/10 * * * *", async () => {
   console.log("🔔 Checking for share reminders...");
   const pending = await pool.query(`
@@ -193,6 +226,7 @@ cron.schedule("*/10 * * * *", async () => {
     WHERE awarded IS FALSE OR awarded IS NULL
     GROUP BY member_id;
   `);
+
   pending.rows.forEach((row) => {
     const { member_id, count } = row;
     const remaining = 3 - (count % 3);
@@ -210,8 +244,11 @@ cron.schedule("*/10 * * * *", async () => {
   });
 });
 
-// 🧱 404 Fallback
-app.use((req, res) =>
-  res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
-);
-
+// ------------------------------------
+// 9️⃣ 404 Fallback
+// ------------------------------------
+app.use((req, res) => {
+  res
+    .status(404)
+    .json({ ok: false, error: "NOT_FOUND", path: req.originalUrl });
+});
