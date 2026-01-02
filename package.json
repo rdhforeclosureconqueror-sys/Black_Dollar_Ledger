@@ -19,6 +19,9 @@
   "zod": "^3.23.8",
   "passport": "^0.7.0",
   "passport-google-oauth20": "^2.0.0",
-  "express-session": "^1.17.3"
+  "express-session": "^1.17.3",
+  "ws": "^8.16.0",
+  "node-cron": "^3.0.2"
+
   }
 }
