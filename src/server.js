@@ -9,6 +9,8 @@ import pg from "pg";
 import connectPgSimple from "connect-pg-simple";
 import cron from "node-cron";
 import { WebSocketServer } from "ws";
+import adminRoutes from "./routes/adminRoutes.js";
+app.use("/admin", requireAuth, adminRoutes);
 
 import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
 import authRoutes from "./authRoutes.js";
