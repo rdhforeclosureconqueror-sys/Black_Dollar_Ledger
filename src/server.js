@@ -7,6 +7,12 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import pg from "pg";
 import connectPgSimple from "connect-pg-simple";
+import cron from 'node-cron';
+import { awardStarsFromSharesJob } from './jobs/awardStarsFromShares.js';
+
+cron.schedule('*/5 * * * *', () => {
+  awardStarsFromSharesJob();
+});
 
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
