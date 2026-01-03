@@ -21,7 +21,7 @@ import notificationsRoutes from "./routes/notifications.js";
 dotenv.config();
 
 // ----------------------------------------------------
-// 1️⃣ App Core Setup
+// 1️⃣ Core Setup
 // ----------------------------------------------------
 const app = express();
 app.set("trust proxy", 1);
@@ -44,7 +44,7 @@ if (!APP_BASE_URL || !DATABASE_URL || !SESSION_SECRET) {
 app.use(express.json({ limit: "10mb" }));
 
 // ----------------------------------------------------
-// 2️⃣ CORS Configuration
+// 2️⃣ CORS
 // ----------------------------------------------------
 const allowedOrigins = [
   "https://simbawaujamaa.com",
@@ -58,15 +58,15 @@ app.use(
   cors({
     origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      console.warn("🚫 Blocked by CORS:", origin);
-      callback(new Error(`CORS blocked for origin: ${origin}`));
+      console.warn("🚫 CORS Blocked:", origin);
+      callback(new Error(`CORS denied for origin: ${origin}`));
     },
-    credentials: true, // ✅ allow cookies/sessions cross-domain
+    credentials: true,
   })
 );
 
 // ----------------------------------------------------
-// 3️⃣ Database + Session
+// 3️⃣ Database + Session Store
 // ----------------------------------------------------
 const { Pool } = pg;
 export const pool = new Pool({
@@ -76,9 +76,7 @@ export const pool = new Pool({
 
 const PgSession = connectPgSimple(session);
 
-// ✅ Dynamic cookie domain for both local + prod
-const cookieDomain =
-  NODE_ENV === "production" ? ".simbawaujamaa.com" : undefined;
+const cookieDomain = NODE_ENV === "production" ? ".simbawaujamaa.com" : undefined;
 
 app.use(
   session({
@@ -102,13 +100,19 @@ app.use(
 );
 
 // ----------------------------------------------------
-// 4️⃣ Passport Google Auth
+// 4️⃣ Passport Google OAuth
 // ----------------------------------------------------
 app.use(passport.initialize());
 app.use(passport.session());
 
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
+
+const ADMIN_EMAILS = [
+  "rdhforeclosureconqueror@gmail.com",
+  "rashad@simbawaujamaa.com",
+  "admin@simbawaujamaa.com",
+];
 
 passport.use(
   new GoogleStrategy(
@@ -142,13 +146,15 @@ passport.use(
           ]
         );
 
+        const baseRole = result.rows[0]?.role || "user";
+        const role = ADMIN_EMAILS.includes(email) ? "admin" : baseRole;
+
         const user = {
           id: memberId,
-          googleId: profile.id,
           displayName: profile.displayName,
           email,
           photo: profile.photos?.[0]?.value ?? null,
-          role: result.rows[0]?.role || "user",
+          role,
           provider: "google",
         };
 
@@ -166,28 +172,23 @@ passport.use(
 // ----------------------------------------------------
 function requireAuth(req, res, next) {
   if (req.user) return next();
-  return res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
+  res.status(401).json({ ok: false, error: "LOGIN_REQUIRED" });
 }
 
 function requireAdmin(req, res, next) {
-  const adminEmails = [
-    "rdhforeclosureconqueror@gmail.com",
-    "rashad@simbawaujamaa.com",
-    "admin@simbawaujamaa.com",
-  ];
-  if (req.user && adminEmails.includes(req.user.email)) {
+  if (req.user && ADMIN_EMAILS.includes(req.user.email)) {
     req.user.role = "admin";
     return next();
   }
-  return res.status(403).json({ ok: false, error: "ACCESS_DENIED" });
+  res.status(403).json({ ok: false, error: "ACCESS_DENIED" });
 }
 
-// ✅ Health check
+// ✅ Health check route
 app.get("/health", (_req, res) =>
   res.json({ ok: true, message: "🦁 Simba API healthy" })
 );
 
-// ✅ Routes
+// ✅ Mount routes
 app.use("/auth", authRoutes);
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/ledger/notifications", requireAuth, notificationsRoutes);
@@ -198,11 +199,10 @@ app.use("/admin", requireAuth, requireAdmin, adminRoutes);
 // 6️⃣ WebSocket Setup
 // ----------------------------------------------------
 const server = app.listen(PORT, () => {
-  console.log(`🦁 Simba API + WebSocket live on port ${PORT}`);
+  console.log(`🦁 Simba API + WebSocket running on port ${PORT}`);
 });
 
 export const clients = new Map();
-
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
@@ -211,16 +211,13 @@ wss.on("connection", (ws) => {
   ws.on("message", (msg) => {
     try {
       const parsed = JSON.parse(msg);
-
       if (parsed.type === "register" && parsed.member_id) {
         clients.set(parsed.member_id, ws);
-      }
-
-      if (parsed.type === "admin_register" && parsed.role === "admin") {
+      } else if (parsed.type === "admin_register" && parsed.role === "admin") {
         clients.set(`admin:${parsed.member_id}`, ws);
       }
     } catch (err) {
-      console.error("❌ WS message error:", err);
+      console.error("⚠️ WS message error:", err);
     }
   });
 
@@ -228,37 +225,33 @@ wss.on("connection", (ws) => {
 });
 
 // ----------------------------------------------------
-// 7️⃣ CRON Jobs
+// 7️⃣ CRON Jobs (STAR awarding + reminders)
 // ----------------------------------------------------
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR award job...");
   const newAwards = await awardStarsFromSharesJob(pool);
 
-  newAwards.forEach((award) => {
+  for (const award of newAwards) {
     const ws = clients.get(award.member_id);
     if (ws && ws.readyState === 1) {
-      ws.send(
-        JSON.stringify({
-          type: "star_award",
-          message: `⭐ You earned ${award.delta} STAR!`,
-        })
-      );
+      ws.send(JSON.stringify({
+        type: "star_award",
+        message: `⭐ You earned ${award.delta} STAR!`,
+      }));
     }
 
     // Notify admins
     for (const [key, socket] of clients.entries()) {
       if (key.startsWith("admin:") && socket.readyState === 1) {
-        socket.send(
-          JSON.stringify({
-            type: "star_award_event",
-            member_id: award.member_id,
-            delta: award.delta,
-            timestamp: new Date().toISOString(),
-          })
-        );
+        socket.send(JSON.stringify({
+          type: "star_award_event",
+          member_id: award.member_id,
+          delta: award.delta,
+          timestamp: new Date().toISOString(),
+        }));
       }
     }
-  });
+  }
 });
 
 cron.schedule("*/10 * * * *", async () => {
@@ -275,19 +268,17 @@ cron.schedule("*/10 * * * *", async () => {
     if (remaining > 0 && remaining < 3) {
       const ws = clients.get(row.member_id);
       if (ws && ws.readyState === 1) {
-        ws.send(
-          JSON.stringify({
-            type: "reminder",
-            message: `🔸 ${remaining} more shares to your next STAR!`,
-          })
-        );
+        ws.send(JSON.stringify({
+          type: "reminder",
+          message: `🔸 ${remaining} more shares to your next STAR!`,
+        }));
       }
     }
   });
 });
 
 // ----------------------------------------------------
-// 8️⃣ 404 + Error Handlers
+// 8️⃣ Error + 404 Handling
 // ----------------------------------------------------
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl });
