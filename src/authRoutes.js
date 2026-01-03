@@ -3,16 +3,24 @@ import { Router } from "express";
 import passport from "passport";
 import { pool } from "./server.js";
 
-const r = Router();
+const router = Router();
 
+// 🌍 Base app URL
 function getAppBaseUrl() {
   return process.env.APP_BASE_URL || "https://simbawaujamaa.com";
 }
 
+// 🦁 Define who the real admin(s) are
+const ADMIN_EMAILS = [
+  "rdhforeclosureconqueror@gmail.com",
+  "rashad@simbawaujamaa.com",
+  "admin@simbawaujamaa.com",
+];
+
 // ----------------------------------------------------
-// 1️⃣ Google OAuth Login
+// 1️⃣ Start Google OAuth
 // ----------------------------------------------------
-r.get(
+router.get(
   "/google",
   passport.authenticate("google", {
     scope: ["profile", "email"],
@@ -21,9 +29,9 @@ r.get(
 );
 
 // ----------------------------------------------------
-// 2️⃣ Google Callback
+// 2️⃣ Google Callback (sets up session)
 // ----------------------------------------------------
-r.get(
+router.get(
   "/google/callback",
   passport.authenticate("google", {
     failureRedirect: "/auth/fail",
@@ -32,63 +40,56 @@ r.get(
   async (req, res) => {
     try {
       const userId = req.user?.id;
+      if (!userId) throw new Error("No user ID returned from Google");
+
+      // Get or create user in DB
       const result = await pool.query(
-        "SELECT role FROM members WHERE member_id=$1",
+        "SELECT role FROM members WHERE member_id = $1",
         [userId]
       );
 
-      // Default role
       let role = result.rows[0]?.role || "user";
 
-      // ✅ Automatically promote approved emails
-      const adminEmails = [
-        "rdhforeclosureconqueror@gmail.com",
-        "rashad@simbawaujamaa.com",
-        "admin@simbawaujamaa.com",
-      ];
-      if (adminEmails.includes(req.user.email)) {
+      // 🔐 Promote admin automatically
+      if (ADMIN_EMAILS.includes(req.user.email)) {
         role = "admin";
       }
 
+      // Persist user info
       req.user.role = role;
-
-      // ✅ Persist user + role in the session
       req.session.passport.user = req.user;
-      await new Promise((resolve, reject) => {
-        req.session.save((err) => (err ? reject(err) : resolve()));
-      });
 
+      await new Promise((resolve, reject) =>
+        req.session.save((err) => (err ? reject(err) : resolve()))
+      );
+
+      console.log(`✅ ${req.user.email} logged in as ${role}`);
       res.redirect(`${getAppBaseUrl()}/`);
     } catch (err) {
-      console.error("❌ Error setting user role:", err);
+      console.error("❌ Google callback error:", err);
       res.redirect(`${getAppBaseUrl()}/`);
     }
   }
 );
 
 // ----------------------------------------------------
-// 3️⃣ /me (get current logged-in user)
+// 3️⃣ /me — Return current logged-in user
 // ----------------------------------------------------
-r.get("/me", async (req, res) => {
+router.get("/me", async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ ok: false, auth: false });
   }
 
   try {
     const roleCheck = await pool.query(
-      "SELECT role FROM members WHERE member_id=$1",
+      "SELECT role FROM members WHERE member_id = $1",
       [req.user.id]
     );
 
     let role = roleCheck.rows[0]?.role || "user";
 
-    // ✅ Enforce admin status from email
-    const adminEmails = [
-      "rdhforeclosureconqueror@gmail.com",
-      "rashad@simbawaujamaa.com",
-      "admin@simbawaujamaa.com",
-    ];
-    if (adminEmails.includes(req.user.email)) {
+    // Reconfirm admin
+    if (ADMIN_EMAILS.includes(req.user.email)) {
       role = "admin";
     }
 
@@ -98,40 +99,47 @@ r.get("/me", async (req, res) => {
       user: { ...req.user, role },
     });
   } catch (err) {
-    console.error("❌ Error in /auth/me:", err);
-    res.json({ ok: true, auth: true, user: req.user });
+    console.error("❌ /auth/me error:", err);
+    res.status(500).json({
+      ok: false,
+      auth: true,
+      error: "Database lookup failed",
+      user: req.user,
+    });
   }
 });
 
 // ----------------------------------------------------
-// 4️⃣ Status
+// 4️⃣ Auth Status (lightweight ping)
 // ----------------------------------------------------
-r.get("/status", (req, res) =>
+router.get("/status", (req, res) =>
   res.json({ ok: true, auth: !!req.user })
 );
 
 // ----------------------------------------------------
-// 5️⃣ Logout
+// 5️⃣ Logout and clear session
 // ----------------------------------------------------
-r.post("/logout", (req, res, next) => {
+router.post("/logout", (req, res, next) => {
   req.logout((err) => {
     if (err) return next(err);
+
     req.session?.destroy(() => {
       res.clearCookie("bd.sid", {
         path: "/",
         sameSite: "lax",
         secure: process.env.NODE_ENV === "production",
       });
+
       res.json({ ok: true, message: "Logged out" });
     });
   });
 });
 
 // ----------------------------------------------------
-// 6️⃣ Fail
+// 6️⃣ OAuth Failure Redirect
 // ----------------------------------------------------
-r.get("/fail", (_req, res) =>
+router.get("/fail", (_req, res) =>
   res.status(401).send("Google login failed")
 );
 
-export default r;
+export default router;
