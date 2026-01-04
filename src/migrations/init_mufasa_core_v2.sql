@@ -1,5 +1,5 @@
 -- ================================================================
--- 🦁 MUFASA CORE 2.0 DATABASE MIGRATION
+-- 🦁 MUFASA CORE 2.0 DATABASE MIGRATION 
 -- Purpose: Expand the Simba / Mufasa database into a unified system
 -- Covering: Members, Fitness, Study, Forms, AI, Unified Ledger
 -- ================================================================
