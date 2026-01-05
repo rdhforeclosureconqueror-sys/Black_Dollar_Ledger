@@ -105,4 +105,23 @@ CREATE INDEX IF NOT EXISTS idx_ai_member ON ai_sessions (member_id);
 CREATE INDEX IF NOT EXISTS idx_xp_member ON xp_transactions (member_id);
 CREATE INDEX IF NOT EXISTS idx_star_member ON star_transactions (member_id);
 
+-- ✅ AI METRICS TABLE
+CREATE TABLE IF NOT EXISTS ai_metrics (
+  id SERIAL PRIMARY KEY,
+  member_id TEXT REFERENCES members(member_id) ON DELETE CASCADE,
+  metric_type TEXT CHECK (metric_type IN ('motion','voice','journal')),
+  score NUMERIC,
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ✅ AI MODELS (optional for tracking training)
+CREATE TABLE IF NOT EXISTS ai_models (
+  id SERIAL PRIMARY KEY,
+  model_name TEXT,
+  version TEXT,
+  parameters JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 COMMIT;
