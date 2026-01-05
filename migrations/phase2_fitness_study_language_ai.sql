@@ -13,6 +13,18 @@ CREATE TABLE IF NOT EXISTS members (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS ai_holistic_state (
+  member_id TEXT PRIMARY KEY REFERENCES members(member_id),
+  physical_score NUMERIC DEFAULT 0,
+  mental_score NUMERIC DEFAULT 0,
+  linguistic_score NUMERIC DEFAULT 0,
+  cultural_score NUMERIC DEFAULT 0,
+  overall_health NUMERIC DEFAULT 0,
+  last_sync TIMESTAMP DEFAULT NOW(),
+  history JSONB DEFAULT '[]'::jsonb
+);
+
+
 -- 🌍 FITNESS EVENTS
 CREATE TABLE IF NOT EXISTS fitness_events (
   id SERIAL PRIMARY KEY,
