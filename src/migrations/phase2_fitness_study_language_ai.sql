@@ -124,4 +124,28 @@ CREATE TABLE IF NOT EXISTS ai_models (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ✅ ai_adaptive_profiles — stores user learning patterns
+CREATE TABLE IF NOT EXISTS ai_adaptive_profiles (
+  member_id TEXT PRIMARY KEY REFERENCES members(member_id),
+  motion_avg NUMERIC DEFAULT 0,
+  voice_avg NUMERIC DEFAULT 0,
+  journal_avg NUMERIC DEFAULT 0,
+  consistency_score NUMERIC DEFAULT 0,
+  current_difficulty NUMERIC DEFAULT 1,
+  last_adapted TIMESTAMP DEFAULT NOW(),
+  evolution_state JSONB DEFAULT '{}'::jsonb
+);
+
+-- ✅ ai_recommendations — stores active AI guidance
+CREATE TABLE IF NOT EXISTS ai_recommendations (
+  id SERIAL PRIMARY KEY,
+  member_id TEXT REFERENCES members(member_id),
+  category TEXT CHECK (category IN ('motion','voice','journal','study')),
+  recommendation TEXT,
+  impact TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  acknowledged BOOLEAN DEFAULT FALSE
+);
+
+
 COMMIT;
