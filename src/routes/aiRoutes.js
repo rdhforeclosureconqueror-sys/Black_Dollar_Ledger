@@ -1,23 +1,31 @@
+// ✅ src/routes/aiRoutes.js
 import { Router } from "express";
-import { pool } from "../server.js";
-import { grantReward } from "../utils/rewardEngine.js";
+import { aiPipeline } from "../ai/aiPipeline.js";
 
 const r = Router();
 
-r.post("/session", async (req, res) => {
-  const memberId = req.user.id;
-  const { session_id, summary } = req.body;
-  try {
-    await pool.query(
-      `INSERT INTO ai_sessions (member_id, session_id, summary_json)
-       VALUES ($1, $2, $3)`,
-      [memberId, session_id, JSON.stringify(summary || {})]
-    );
-    const reward = await grantReward(memberId, "fitness", "workout_complete");
-    res.json({ ok: true, reward });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+// 🏋️ POST /ai/workout
+r.post("/workout", async (req, res) => {
+  const { member_id } = req.user;
+  const { motionData } = req.body;
+  const result = await aiPipeline.processWorkoutMotion({ member_id, motionData });
+  res.json(result);
+});
+
+// 🗣️ POST /ai/language
+r.post("/language", async (req, res) => {
+  const { member_id } = req.user;
+  const { audioFeatures } = req.body;
+  const result = await aiPipeline.analyzeLanguageVoice({ member_id, audioFeatures });
+  res.json(result);
+});
+
+// 📚 POST /ai/journal
+r.post("/journal", async (req, res) => {
+  const { member_id } = req.user;
+  const { content } = req.body;
+  const result = await aiPipeline.analyzeJournal({ member_id, content });
+  res.json(result);
 });
 
 export default r;
