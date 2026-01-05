@@ -170,5 +170,27 @@ CREATE TABLE IF NOT EXISTS ai_movement_sessions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- ✅ ai_knowledge_nodes — every key event or insight becomes a node
+CREATE TABLE IF NOT EXISTS ai_knowledge_nodes (
+  id SERIAL PRIMARY KEY,
+  member_id TEXT REFERENCES members(member_id),
+  category TEXT CHECK (category IN ('motion','journal','voice','study','reward')),
+  label TEXT,
+  value NUMERIC,
+  context JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ✅ ai_predictions — the predictive engine’s insights
+CREATE TABLE IF NOT EXISTS ai_predictions (
+  id SERIAL PRIMARY KEY,
+  member_id TEXT REFERENCES members(member_id),
+  type TEXT CHECK (type IN ('motivation_drop','burnout_risk','growth_surge','language_gain')),
+  confidence NUMERIC,
+  message TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  acknowledged BOOLEAN DEFAULT FALSE
+);
+
 
 COMMIT;
