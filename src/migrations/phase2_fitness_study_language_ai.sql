@@ -147,5 +147,16 @@ CREATE TABLE IF NOT EXISTS ai_recommendations (
   acknowledged BOOLEAN DEFAULT FALSE
 );
 
+CREATE TABLE IF NOT EXISTS ai_movement_sessions (
+  id SERIAL PRIMARY KEY,
+  member_id TEXT REFERENCES members(member_id),
+  session_id TEXT UNIQUE,
+  movement_type TEXT,
+  reps INTEGER DEFAULT 0,
+  accuracy NUMERIC DEFAULT 0,
+  duration_seconds INTEGER DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 
 COMMIT;
