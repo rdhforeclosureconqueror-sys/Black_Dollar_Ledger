@@ -1,4 +1,4 @@
-✅ src/server.js — Simba Backend Core (Stable + Render Compatible + Auto Migrations)
+// ✅ src/server.js — Simba Backend Core (Stable + Render Compatible + Auto Migrations)
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
