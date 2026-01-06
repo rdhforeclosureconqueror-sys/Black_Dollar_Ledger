@@ -11,7 +11,7 @@ import cron from "node-cron";
 import { WebSocketServer } from "ws";
 
 // 🧠 Internal Modules
-import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
+import { awardStarsFromSharesJob } from "./routes/jobs/awardStarsFromShares.js";
 import { processReward } from "./utils/rewardEngine.js";
 import { broadcastToClients } from "./utils/wsBroadcast.js";
 
