@@ -11,7 +11,7 @@ import cron from "node-cron";
 import { WebSocketServer } from "ws";
 
 // 🧠 Internal Modules
-import { awardStarsFromSharesJob } from "./routes/jobs/awardStarsFromShares.js";
+import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
 import { pool } from "./db.js";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
