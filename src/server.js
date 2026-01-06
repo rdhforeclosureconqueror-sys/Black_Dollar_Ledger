@@ -77,10 +77,13 @@ app.use(
 // 3️⃣ Session + Database Pool
 // ----------------------------------------------------
 const { Pool } = pg;
-export const db = new Pool({
+const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
+
+// ✅ Backward Compatibility Export (pool + db)
+export { pool, pool as db };
 
 const PgSession = connectPgSimple(session);
 
@@ -88,7 +91,7 @@ app.use(
   session({
     name: "simba.sid",
     store: new PgSession({
-      pool: db,
+      pool,
       tableName: "session",
       createTableIfMissing: true,
     }),
@@ -100,7 +103,7 @@ app.use(
       secure: NODE_ENV === "production",
       sameSite: NODE_ENV === "production" ? "none" : "lax",
       domain: NODE_ENV === "production" ? ".simbawaujamaa.com" : undefined,
-      maxAge: 1000 * 60 * 60 * 24 * 7,
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   })
 );
@@ -132,7 +135,7 @@ passport.use(
       const memberId = profile.id;
 
       try {
-        const result = await db.query(
+        const result = await pool.query(
           `
           INSERT INTO members (member_id, provider, display_name, email, photo)
           VALUES ($1, $2, $3, $4, $5)
@@ -142,7 +145,7 @@ passport.use(
             email = EXCLUDED.email, 
             photo = EXCLUDED.photo
           RETURNING role;
-        `,
+          `,
           [
             memberId,
             "google",
@@ -229,7 +232,7 @@ wss.on("connection", (ws) => {
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR share job...");
   try {
-    const results = await awardStarsFromSharesJob(db);
+    const results = await awardStarsFromSharesJob(pool);
     results.forEach((r) =>
       broadcastToClients(r.member_id, {
         type: "star_award",
@@ -244,7 +247,7 @@ cron.schedule("*/5 * * * *", async () => {
 cron.schedule("*/10 * * * *", async () => {
   console.log("🧠 Checking adaptive XP rewards...");
   try {
-    await processReward(db, clients);
+    await processReward(pool, clients);
   } catch (err) {
     console.error("❌ Reward process failed:", err);
   }
