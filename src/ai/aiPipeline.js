@@ -1,23 +1,16 @@
-// ✅ src/ai/aiPipeline.js
-import * as tf from "@tensorflow/tfjs-node";
+// ✅ src/ai/aiPipeline.js (Backend)
 import { pool } from "../server.js";
 import { notifyAI } from "../utils/aiNotifier.js";
 
 export const aiPipeline = {
-  async processWorkoutMotion({ member_id, motionData }) {
+  async processWorkoutMotion({ member_id, accuracy, intensity }) {
     try {
-      const input = tf.tensor(motionData);
-      const normalized = input.div(tf.scalar(255));
-      const intensity = normalized.mean().dataSync()[0] * 100;
-      const accuracy = Math.max(0, 100 - Math.abs(50 - intensity));
-
       await pool.query(
         `INSERT INTO ai_metrics (member_id, metric_type, score, metadata)
          VALUES ($1, 'motion', $2, $3)`,
         [member_id, accuracy, JSON.stringify({ intensity })]
       );
 
-      // reward + notify
       if (accuracy >= 75) {
         await pool.query(
           `INSERT INTO star_transactions (member_id, delta, reason)
@@ -43,14 +36,12 @@ export const aiPipeline = {
     }
   },
 
-  async analyzeLanguageVoice({ member_id, audioFeatures }) {
+  async analyzeLanguageVoice({ member_id, clarity }) {
     try {
-      const clarity = tf.tensor(audioFeatures).mean().dataSync()[0] * 100;
-
       await pool.query(
         `INSERT INTO ai_metrics (member_id, metric_type, score, metadata)
-         VALUES ($1, 'voice', $2, $3)`,
-        [member_id, clarity, JSON.stringify({ features: audioFeatures.length })]
+         VALUES ($1, 'voice', $2, '{}')`,
+        [member_id, clarity]
       );
 
       if (clarity >= 70) {
@@ -78,16 +69,12 @@ export const aiPipeline = {
     }
   },
 
-  async analyzeJournal({ member_id, content }) {
+  async analyzeJournal({ member_id, positivity }) {
     try {
-      const positivity =
-        (content.match(/(peace|growth|love|progress|power|heal|unity)/gi) || [])
-          .length * 10;
-
       await pool.query(
         `INSERT INTO ai_metrics (member_id, metric_type, score, metadata)
-         VALUES ($1, 'journal', $2, $3)`,
-        [member_id, positivity, JSON.stringify({ textLength: content.length })]
+         VALUES ($1, 'journal', $2, '{}')`,
+        [member_id, positivity]
       );
 
       if (positivity >= 30) {
