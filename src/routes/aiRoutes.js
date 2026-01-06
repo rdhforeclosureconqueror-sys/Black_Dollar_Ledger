@@ -12,7 +12,7 @@ import { WebSocketServer } from "ws";
 
 // 🧠 Internal Modules
 import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
-import { pool } from "./db.js";
+import { pool } from "../db.js";
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
