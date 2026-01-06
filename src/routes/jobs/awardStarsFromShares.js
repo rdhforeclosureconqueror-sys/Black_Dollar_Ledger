@@ -1,5 +1,5 @@
 // src/jobs/awardStarsFromShares.js
-import { query } from "../db.js";
+import { query } from "../../db.js";
 import { notifyMember, broadcastToAdmins } from "../../utils/wsBroadcast.js";
 
 /**
