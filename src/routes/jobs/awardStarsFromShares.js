@@ -1,6 +1,6 @@
 // src/jobs/awardStarsFromShares.js
 import { query } from "../db.js";
-import { notifyMember, broadcastToAdmins } from "../utils/wsBroadcast.js";
+import { notifyMember, broadcastToAdmins } from "../../utils/wsBroadcast.js";
 
 /**
  * 🏆 Award 1 STAR for every 3 unawarded shares
