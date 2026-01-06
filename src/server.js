@@ -1,4 +1,4 @@
-// ✅ src/server.js — Simba Backend Core (Unified + Optimized)
+// ✅ src/server.js — Simba Backend Core (Stable + Render Compatible)
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -12,7 +12,10 @@ import { WebSocketServer } from "ws";
 
 // 🧠 Internal Modules
 import { awardStarsFromSharesJob } from "./jobs/awardStarsFromShares.js";
-import { pool } from "./db.js";
+import { processReward } from "./utils/rewardEngine.js";
+import { broadcastToClients } from "./utils/wsBroadcast.js";
+
+// Route Imports
 import authRoutes from "./authRoutes.js";
 import ledgerRoutes from "./ledgerRoutes.js";
 import pagtRoutes from "./pagtRoutes.js";
@@ -22,8 +25,6 @@ import fitnessRoutes from "./routes/fitnessRoutes.js";
 import studyRoutes from "./routes/studyRoutes.js";
 import languageRoutes from "./routes/languageRoutes.js";
 import aiRoutes from "./routes/aiRoutes.js";
-import { broadcastToClients } from "./utils/wsBroadcast.js";
-import { processReward } from "./utils/rewardEngine.js";
 
 dotenv.config();
 
@@ -99,7 +100,7 @@ app.use(
       secure: NODE_ENV === "production",
       sameSite: NODE_ENV === "production" ? "none" : "lax",
       domain: NODE_ENV === "production" ? ".simbawaujamaa.com" : undefined,
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
 );
@@ -129,15 +130,19 @@ passport.use(
     async (_access, _refresh, profile, done) => {
       const email = profile.emails?.[0]?.value ?? null;
       const memberId = profile.id;
+
       try {
         const result = await db.query(
           `
           INSERT INTO members (member_id, provider, display_name, email, photo)
           VALUES ($1, $2, $3, $4, $5)
           ON CONFLICT (member_id)
-          DO UPDATE SET display_name = EXCLUDED.display_name, email = EXCLUDED.email, photo = EXCLUDED.photo
+          DO UPDATE SET 
+            display_name = EXCLUDED.display_name, 
+            email = EXCLUDED.email, 
+            photo = EXCLUDED.photo
           RETURNING role;
-          `,
+        `,
           [
             memberId,
             "google",
@@ -149,7 +154,13 @@ passport.use(
 
         const baseRole = result.rows[0]?.role || "user";
         const role = ADMIN_EMAILS.includes(email) ? "admin" : baseRole;
-        done(null, { id: memberId, email, displayName: profile.displayName, photo: profile.photos?.[0]?.value, role });
+        done(null, {
+          id: memberId,
+          email,
+          displayName: profile.displayName,
+          photo: profile.photos?.[0]?.value,
+          role,
+        });
       } catch (err) {
         console.error("❌ OAuth DB error:", err);
         done(err, null);
@@ -172,9 +183,11 @@ function requireAdmin(req, res, next) {
 }
 
 // ----------------------------------------------------
-// 6️⃣ Routes (Phases 1–12)
+// 6️⃣ Routes
 // ----------------------------------------------------
-app.get("/health", (_req, res) => res.json({ ok: true, message: "🦁 Simba API Healthy" }));
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, message: "🦁 Simba API Healthy" })
+);
 app.use("/auth", authRoutes);
 app.use("/ledger", requireAuth, ledgerRoutes);
 app.use("/ledger/notifications", requireAuth, notificationsRoutes);
@@ -186,10 +199,12 @@ app.use("/language", requireAuth, languageRoutes);
 app.use("/ai", requireAuth, aiRoutes);
 
 // ----------------------------------------------------
-// 7️⃣ WebSocket + AI Integration
+// 7️⃣ WebSocket Integration
 // ----------------------------------------------------
 export const clients = new Map();
-const server = app.listen(PORT, () => console.log(`🦁 Simba API running on ${PORT}`));
+const server = app.listen(PORT, () =>
+  console.log(`🦁 Simba API running on port ${PORT}`)
+);
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
@@ -197,36 +212,52 @@ wss.on("connection", (ws) => {
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-      if (data.type === "register" && data.member_id) clients.set(data.member_id, ws);
-      if (data.type === "admin_register" && data.role === "admin") clients.set(`admin:${data.member_id}`, ws);
+      if (data.type === "register" && data.member_id)
+        clients.set(data.member_id, ws);
+      if (data.type === "admin_register" && data.role === "admin")
+        clients.set(`admin:${data.member_id}`, ws);
     } catch (e) {
-      console.error("⚠️ WS error:", e);
+      console.error("⚠️ WebSocket error:", e);
     }
   });
   ws.on("close", () => console.log("🔴 WebSocket disconnected"));
 });
 
 // ----------------------------------------------------
-// 8️⃣ Cron Jobs (Adaptive Rewards + Share Stars)
+// 8️⃣ Cron Jobs
 // ----------------------------------------------------
 cron.schedule("*/5 * * * *", async () => {
   console.log("🔄 Running STAR share job...");
-  const results = await awardStarsFromSharesJob(db);
-  results.forEach((r) => broadcastToClients(r.member_id, {
-    type: "star_award",
-    message: `⭐ ${r.delta} STAR earned!`,
-  }));
+  try {
+    const results = await awardStarsFromSharesJob(db);
+    results.forEach((r) =>
+      broadcastToClients(r.member_id, {
+        type: "star_award",
+        message: `⭐ ${r.delta} STAR earned!`,
+      })
+    );
+  } catch (err) {
+    console.error("❌ Cron job failed:", err);
+  }
 });
 
 cron.schedule("*/10 * * * *", async () => {
   console.log("🧠 Checking adaptive XP rewards...");
-  await processReward(db, clients);
+  try {
+    await processReward(db, clients);
+  } catch (err) {
+    console.error("❌ Reward process failed:", err);
+  }
 });
 
 // ----------------------------------------------------
 // 9️⃣ Error Handling
 // ----------------------------------------------------
-app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND", path: req.originalUrl }));
+app.use((req, res) =>
+  res
+    .status(404)
+    .json({ ok: false, error: "NOT_FOUND", path: req.originalUrl })
+);
 app.use((err, _req, res, _next) => {
   console.error("💥 Server Error:", err);
   res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
